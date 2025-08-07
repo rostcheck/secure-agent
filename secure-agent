@@ -1,0 +1,374 @@
+#!/bin/bash
+# secure-agent - Main CLI for managing secure AI environments
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECTS_DIR="$HOME/Source"
+DOCKER_IMAGE="secure-ai-agent:latest"
+
+# Ensure projects directory exists
+mkdir -p "$PROJECTS_DIR"
+
+usage() {
+    cat << EOF
+Usage: secure-agent <command> [options] [project-name]
+
+Commands:
+    create <project-name>     Create new project environment
+    activate <project-name>   Activate existing project
+    suspend <project-name>    Stop container, preserve state
+    destroy <project-name>    Remove container and volumes
+    list                      List all project environments
+    sync <project-name>       Manual sync files
+    status <project-name>     Show environment status
+    debug <project-name>      Debug environment (show mounts, paths, etc.)
+
+Options:
+    -h, --help               Show this help message
+    -v, --verbose            Verbose output
+    --rebuild                Rebuild container image
+
+Examples:
+    secure-agent create my-project
+    secure-agent activate my-project
+    secure-agent debug my-project
+    secure-agent suspend my-project
+EOF
+}
+
+build_image() {
+    echo "Building secure AI agent image..."
+    
+    # Use the dedicated build script to avoid context window overflow
+    if ! "$SCRIPT_DIR/scripts/build-image.sh"; then
+        echo "Error: Docker build failed"
+        echo "Check the build log for details"
+        exit 1
+    fi
+    
+    echo "✓ Image ready"
+}
+
+create_environment() {
+    local project_name="$1"
+    local project_dir="$PROJECTS_DIR/$project_name"
+    local container_name="secure-ai-$project_name"
+    
+    echo "Creating secure environment for '$project_name'..."
+    
+    # Check if project directory exists
+    if [ ! -d "$project_dir" ]; then
+        echo "Creating project directory: $project_dir"
+        mkdir -p "$project_dir"
+        echo "# $project_name" > "$project_dir/README.md"
+        
+        # Copy pre-created Q CLI context files
+        echo "Setting up Q CLI context files..."
+        cp "$SCRIPT_DIR/docker/templates/AmazonQ.md" "$project_dir/"
+        mkdir -p "$project_dir/.amazonq/rules"
+        cp "$SCRIPT_DIR/docker/templates/project-setup.md" "$project_dir/.amazonq/rules/"
+        
+        # Copy MCP configuration
+        cp "$SCRIPT_DIR/docker/templates/workspace-mcp.json" "$project_dir/.amazonq/mcp.json"
+        echo "✓ Q CLI context files and MCP configuration created"
+        
+        echo "Project created at: $project_dir"
+    fi
+    
+    # Build base image - use more robust check
+    if ! docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^$DOCKER_IMAGE$"; then
+        build_image
+    fi
+    
+    # Check if container already exists
+    if docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        echo "Error: Environment '$project_name' already exists"
+        echo "Use 'secure-agent activate $project_name' to start it"
+        exit 1
+    fi
+    
+    # Create docker-compose file for this project
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    export PROJECT_NAME="$project_name"
+    export HOST_PROJECT_DIR="$project_dir"
+    envsubst < "$SCRIPT_DIR/docker/docker-compose.yml.template" > "$compose_file"
+    
+    # Create and start container
+    echo "Creating container..."
+    docker-compose -f "$compose_file" up -d
+    
+    # Wait for container to be ready
+    echo "Waiting for container to initialize..."
+    sleep 5
+    
+    # Set up Q CLI configuration
+    "$SCRIPT_DIR/scripts/setup-q-config.sh" "$project_name"
+    
+    # Set up encrypted keychain
+    "$SCRIPT_DIR/scripts/setup-keychain.sh" "$project_name"
+    
+    echo "✓ Environment '$project_name' created successfully"
+    echo "Project directory: $project_dir"
+    echo "To activate: secure-agent activate $project_name"
+}
+
+activate_environment() {
+    local project_name="$1"
+    local container_name="secure-ai-$project_name"
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    
+    echo "Activating secure environment '$project_name'..."
+    
+    # Check if compose file exists
+    if [ ! -f "$compose_file" ]; then
+        echo "Error: Environment '$project_name' does not exist"
+        echo "Create it first: secure-agent create $project_name"
+        exit 1
+    fi
+    
+    # Start container if stopped
+    if ! docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        if docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$"; then
+            echo "Starting existing container..."
+            docker-compose -f "$compose_file" start
+            sleep 3
+        else
+            echo "Error: Container not found. Try recreating the environment."
+            exit 1
+        fi
+    fi
+    
+    echo "Entering secure environment..."
+    echo "Working directory: /home/aiuser/workspace"
+    echo "Type 'exit' to return to host system"
+    echo ""
+    
+    # Enter interactive shell
+    docker exec -it "$container_name" /bin/bash -c "cd /home/aiuser/workspace && exec bash -l"
+}
+
+suspend_environment() {
+    local project_name="$1"
+    local container_name="secure-ai-$project_name"
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    
+    echo "Suspending environment '$project_name'..."
+    
+    if [ ! -f "$compose_file" ]; then
+        echo "Error: Environment '$project_name' does not exist"
+        exit 1
+    fi
+    
+    if docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        # Stop container
+        docker-compose -f "$compose_file" stop
+        echo "✓ Environment suspended"
+        echo "Container stopped. Volumes and data preserved."
+        echo "Use 'secure-agent activate $project_name' to resume."
+    else
+        echo "Environment '$project_name' is not running"
+    fi
+}
+
+destroy_environment() {
+    local project_name="$1"
+    local container_name="secure-ai-$project_name"
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    
+    if [ ! -f "$compose_file" ]; then
+        echo "Error: Environment '$project_name' does not exist"
+        exit 1
+    fi
+    
+    echo "WARNING: This will permanently delete the environment and all container data."
+    echo "Project files in ~/Source/$project_name will be preserved."
+    read -p "Type '$project_name' to confirm: " confirmation
+    
+    if [ "$confirmation" != "$project_name" ]; then
+        echo "Destruction cancelled"
+        exit 1
+    fi
+    
+    echo "Destroying environment '$project_name'..."
+    
+    # Stop and remove container and volumes
+    docker-compose -f "$compose_file" down -v
+    
+    # Remove compose file
+    rm -f "$compose_file"
+    
+    echo "✓ Environment destroyed"
+    echo "Project files preserved in ~/Source/$project_name"
+}
+
+list_environments() {
+    echo "Secure AI Environments:"
+    echo "======================"
+    
+    # List containers
+    if docker ps -a --filter "name=secure-ai-" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}" | grep -q "secure-ai-"; then
+        docker ps -a --filter "name=secure-ai-" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}" | \
+            sed 's/secure-ai-//g' | \
+            sed '1s/NAMES/PROJECT/'
+    else
+        echo "No environments found."
+        echo "Create one with: secure-agent create <project-name>"
+    fi
+}
+
+status_environment() {
+    local project_name="$1"
+    local container_name="secure-ai-$project_name"
+    
+    echo "Environment Status: $project_name"
+    echo "================================="
+    
+    if docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        echo "Status: Running"
+        echo ""
+        docker stats "$container_name" --no-stream --format "table {{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"
+    elif docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        echo "Status: Stopped"
+        echo "Use 'secure-agent activate $project_name' to start"
+    else
+        echo "Status: Not found"
+        echo "Use 'secure-agent create $project_name' to create"
+    fi
+}
+
+debug_environment() {
+    local project_name="$1"
+    local container_name="secure-ai-$project_name"
+    local project_dir="$PROJECTS_DIR/$project_name"
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    
+    echo "Debug Information: $project_name"
+    echo "================================="
+    echo ""
+    
+    # Host-side information
+    echo "Host Information:"
+    echo "  Project directory: $project_dir"
+    echo "  Directory exists: $([ -d "$project_dir" ] && echo "Yes" || echo "No")"
+    if [ -d "$project_dir" ]; then
+        echo "  Directory contents: $(ls -la "$project_dir" | wc -l) items"
+        echo "  Sample files:"
+        ls -la "$project_dir" | head -5
+    fi
+    echo "  Compose file: $compose_file"
+    echo "  Compose file exists: $([ -f "$compose_file" ] && echo "Yes" || echo "No")"
+    echo ""
+    
+    # Container information
+    echo "Container Information:"
+    if docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        echo "  Container exists: Yes"
+        echo "  Container status: $(docker ps -a --filter "name=$container_name" --format "{{.Status}}")"
+        
+        if docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+            echo "  Container is running - checking mounts..."
+            echo ""
+            echo "  Mount information:"
+            docker inspect "$container_name" --format '{{range .Mounts}}{{.Source}} -> {{.Destination}} ({{.Type}}){{"\n"}}{{end}}'
+            echo ""
+            echo "  Workspace contents from inside container:"
+            docker exec "$container_name" ls -la /home/aiuser/workspace/ 2>/dev/null || echo "    Could not list workspace contents"
+            echo ""
+            echo "  Q CLI config from inside container:"
+            docker exec "$container_name" ls -la /home/aiuser/.config/q/ 2>/dev/null || echo "    Could not list Q config"
+            echo ""
+            echo "  Environment variables:"
+            docker exec "$container_name" env | grep -E "(PATH|HOME)" 2>/dev/null || echo "    Could not get environment"
+            echo ""
+            echo "  Test API key retrieval:"
+            docker exec "$container_name" python3 -c "
+import keyring
+try:
+    key = keyring.get_password('perplexity-api', 'default')
+    if key:
+        print(f'  API key found: {key[:8]}...{key[-4:]} (length: {len(key)})')
+    else:
+        print('  API key not found')
+except Exception as e:
+    print(f'  Error checking API key: {e}')
+" 2>/dev/null || echo "    Could not check API key"
+        else
+            echo "  Container is stopped - start it to see mount details"
+        fi
+    else
+        echo "  Container exists: No"
+        echo "  Use 'secure-agent create $project_name' to create it"
+    fi
+}
+
+# Parse options
+REBUILD=false
+VERBOSE=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --rebuild)
+            REBUILD=true
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE=true
+            set -x
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option $1"
+            usage
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Rebuild image if requested
+if [ "$REBUILD" = true ]; then
+    build_image
+fi
+
+# Main command processing
+case "${1:-}" in
+    create)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        create_environment "$2"
+        ;;
+    activate)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        activate_environment "$2"
+        ;;
+    suspend)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        suspend_environment "$2"
+        ;;
+    destroy)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        destroy_environment "$2"
+        ;;
+    list)
+        list_environments
+        ;;
+    status)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        status_environment "$2"
+        ;;
+    debug)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        debug_environment "$2"
+        ;;
+    *)
+        echo "Error: Unknown command '${1:-}'"
+        usage
+        exit 1
+        ;;
+esac

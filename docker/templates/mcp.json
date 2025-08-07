@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "perplexity-search": {
+      "command": "python3",
+      "args": ["/opt/mcp-servers/perplexity-server.py"],
+      "env": {
+        "PERPLEXITY_API_KEY_KEYRING_SERVICE": "perplexity-api",
+        "PERPLEXITY_API_KEY_KEYRING_USERNAME": "default"
+      },
+      "timeout": 30000
+    }
+  }
+}

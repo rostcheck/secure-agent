@@ -1,0 +1,75 @@
+services:
+  secure-ai-agent:
+    image: secure-ai-agent:latest
+    container_name: secure-ai-${PROJECT_NAME}
+    platform: linux/amd64  # Force x86_64 emulation for Q CLI compatibility
+    
+    # Keep container running
+    command: tail -f /dev/null
+    
+    # Basic security settings
+    user: "1000:1000"
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    
+    # Network access (unrestricted for agent autonomy)
+    networks:
+      - secure-ai-net
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    
+    # Volume mounts
+    volumes:
+      - type: bind
+        source: ${HOST_PROJECT_DIR}
+        target: /home/aiuser/workspace
+        read_only: false
+      
+      - type: bind
+        source: ${HOME}/.config/q
+        target: /home/aiuser/.config/q
+        read_only: true
+      
+      - type: bind
+        source: ${HOME}/.aws
+        target: /home/aiuser/.aws-readonly
+        read_only: true
+      
+      - type: bind
+        source: ${HOME}/Library/Application Support/amazon-q
+        target: /home/aiuser/Library/Application Support/amazon-q
+        read_only: true
+      
+      - type: volume
+        source: ai-keyring-${PROJECT_NAME}
+        target: /home/aiuser/.local/share/keyrings
+    
+    # Clean environment - don't inherit host environment
+    environment:
+      - HOME=/home/aiuser
+      - USER=aiuser
+      - SHELL=/bin/bash
+    
+    # Writable areas for system operations
+    tmpfs:
+      - /tmp:size=2G,uid=1000,gid=1000
+      - /run/user/1000:size=100M,uid=1000,gid=1000
+
+networks:
+  secure-ai-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: secure-ai-br
+
+volumes:
+  ai-keyring-${PROJECT_NAME}:
+    driver: local

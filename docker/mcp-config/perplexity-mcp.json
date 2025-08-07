@@ -1,0 +1,35 @@
+{
+  "name": "perplexity-search",
+  "version": "1.0.0",
+  "description": "Perplexity API MCP Server for web search and research",
+  "command": "python3",
+  "args": ["/opt/mcp-servers/perplexity-server.py"],
+  "env": {
+    "PERPLEXITY_API_KEY_KEYRING_SERVICE": "perplexity-api",
+    "PERPLEXITY_API_KEY_KEYRING_USERNAME": "default"
+  },
+  "transport": {
+    "type": "stdio"
+  },
+  "tools": [
+    {
+      "name": "perplexity_search",
+      "description": "Search the web using Perplexity AI for current information and research",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query to send to Perplexity"
+          },
+          "model": {
+            "type": "string",
+            "description": "Perplexity model to use (default: sonar)",
+            "default": "sonar"
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  ]
+}

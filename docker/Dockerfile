@@ -1,0 +1,123 @@
+# Dockerfile for secure AI agent environment
+FROM ubuntu:22.04
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies and common development tools
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    python3 \
+    python3-pip \
+    nodejs \
+    npm \
+    vim \
+    rsync \
+    gnupg \
+    dbus \
+    gnome-keyring \
+    python3-secretstorage \
+    python3-keyring \
+    python3-keyrings.alt \
+    build-essential \
+    wget \
+    unzip \
+    ca-certificates \
+    software-properties-common \
+    sudo \
+    file \
+    procps \
+    libfuse2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Q CLI during build (requires x86_64 architecture)
+RUN echo "Installing Q CLI via official Debian package..." && \
+    # Download Q CLI package
+    curl --proto '=https' --tlsv1.2 -sSf https://desktop-release.q.us-east-1.amazonaws.com/latest/amazon-q.deb -o /tmp/amazon-q.deb && \
+    # Install GUI dependencies required by Q CLI
+    apt-get update && \
+    apt-get install -y \
+        libgtk-3-0 \
+        libwebkit2gtk-4.1-0 \
+        libayatana-appindicator3-1 \
+    && \
+    # Install Q CLI
+    apt-get install -y /tmp/amazon-q.deb && \
+    # Clean up
+    rm /tmp/amazon-q.deb && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    echo "Q CLI pre-installation complete"
+
+# Install Python packages for MCP server
+RUN pip3 install --no-cache-dir httpx keyring
+
+# Create MCP servers directory and copy Perplexity MCP server
+RUN mkdir -p /opt/mcp-servers
+COPY mcp-servers/perplexity-server.py /opt/mcp-servers/
+RUN chmod +x /opt/mcp-servers/perplexity-server.py
+
+# Pre-create Q CLI configuration structure
+RUN mkdir -p /home/aiuser/.aws/amazonq/agents \
+    /home/aiuser/.aws/amazonq/profiles/default
+
+# Create default agent configuration (clean, no mcpServers)
+COPY templates/default-agent.json /home/aiuser/.aws/amazonq/agents/default.json
+
+# Create MCP server configuration files
+COPY templates/mcp.json /home/aiuser/.aws/amazonq/mcp.json
+RUN mkdir -p /home/aiuser/workspace/.amazonq
+COPY templates/workspace-mcp.json /home/aiuser/workspace/.amazonq/mcp.json
+
+# Create default profile context
+COPY templates/context.json /home/aiuser/.aws/amazonq/profiles/default/context.json
+
+# Create default project context files
+COPY templates/AmazonQ.md /home/aiuser/workspace/AmazonQ.md
+RUN mkdir -p /home/aiuser/workspace/.amazonq/rules
+COPY templates/project-setup.md /home/aiuser/workspace/.amazonq/rules/project-setup.md
+
+# Create python alias
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# Create non-root user and add to sudo group for package installation autonomy
+RUN useradd -m -s /bin/bash -u 1000 aiuser && \
+    echo "aiuser ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+# Set up directories with proper ownership
+RUN mkdir -p /home/aiuser/workspace \
+    /home/aiuser/.config/q \
+    /home/aiuser/.local/share/keyrings \
+    /home/aiuser/.cache \
+    /home/aiuser/.local/bin \
+    /home/aiuser/.aws/amazonq \
+    /home/aiuser/Library/Application\ Support/amazon-q \
+    /home/aiuser/.amazonq/rules \
+    && chown -R aiuser:aiuser /home/aiuser
+
+# Switch to non-root user
+USER aiuser
+WORKDIR /home/aiuser
+
+# Install Homebrew as non-root user
+RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Set up Homebrew environment
+RUN echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> ~/.bashrc
+RUN echo 'export PATH="/home/aiuser/.local/bin:$PATH"' >> ~/.bashrc
+
+# Source Homebrew environment for this build
+ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"
+
+# Create aliases and Q CLI placeholder
+RUN echo 'alias python=python3' >> ~/.bashrc
+RUN echo 'alias qp="echo \"Q CLI not installed yet. Run: sudo apt update && curl -sSf https://desktop-release.q.us-east-1.amazonaws.com/latest/amazon-q.deb -o /tmp/q.deb && sudo apt install -y /tmp/q.deb\""' >> ~/.bashrc
+
+# Note: Q CLI will be installed manually after container creation due to GUI dependency issues
+
+# Copy entry point script
+COPY --chown=aiuser:aiuser entrypoint.sh /home/aiuser/
+RUN chmod +x /home/aiuser/entrypoint.sh
+
+ENTRYPOINT ["/home/aiuser/entrypoint.sh"]
+CMD ["/bin/bash"]

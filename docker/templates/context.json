@@ -1,0 +1,6 @@
+{
+  "paths": ["/home/aiuser/workspace"],
+  "hooks": {
+    "beforeChat": "Please read the project context from AmazonQ.md and .amazonq/rules/ before responding. You have access to Perplexity search for current information - use it when you need up-to-date information or research."
+  }
+}
