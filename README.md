@@ -100,7 +100,7 @@ Perplexity MCP Server
 
 ```
 Host System:
-~/Source/my-project/
+~/Documents/Source/my-project/
 ├── AmazonQ.md                    # Work principles and project context
 ├── .amazonq/
 │   ├── mcp.json                  # MCP server configuration
@@ -123,7 +123,7 @@ Container:
 ### 1. Environment Creation
 ```bash
 secure-agent create my-project
-├── Creates ~/Source/my-project/ directory
+├── Creates ~/Documents/Source/my-project/ directory
 ├── Copies pre-configured Q CLI context files
 ├── Copies MCP configuration for Perplexity integration
 ├── Starts Docker container with pre-built image
@@ -164,12 +164,123 @@ q chat "Search for Docker security practices"
 
 ### Environment Management
 ```bash
-secure-agent create <project>     # Create new environment
-secure-agent activate <project>   # Enter container shell
-secure-agent list                 # List all environments
-secure-agent status <project>     # Check environment status
-secure-agent suspend <project>    # Stop container, preserve data
+secure-agent create <project>     # Create new environment or recreate existing
+secure-agent attach <project>     # Add secure-agent to existing project (non-destructive)
+secure-agent prepare <project>    # Create compose file for recreatable project (RECREATABLE → CONFIGURED)
+secure-agent activate <project>   # Enter/start container environment (auto-prepares if needed)
+secure-agent list                 # List all environments by lifecycle state
+secure-agent status <project>     # Show detailed environment status
+secure-agent suspend <project>    # Stop container, preserve configuration
 secure-agent destroy <project>    # Remove container, keep project files
+```
+
+### Attach Existing Projects
+
+The `attach` command brings existing software projects into the secure-agent ecosystem:
+
+```bash
+# Attach any existing project
+secure-agent attach my-existing-project
+
+# What it does:
+# ✅ Analyzes project structure and detects features
+# ✅ Adds .amazonq/ directory with AI configuration
+# ✅ Installs Q CLI context and MCP setup
+# ✅ Creates Docker container environment
+# ✅ Preserves ALL original project files (non-destructive)
+
+# Then activate and use
+secure-agent activate my-existing-project
+# Inside container: q login && q chat
+```
+
+**Attach Features:**
+- 🔍 **Smart Detection** - Recognizes Python, Node.js, Rust, Go, Java projects
+- 🛡️ **Non-Destructive** - Never modifies existing files
+- 🤖 **AI Context** - Auto-generates project-specific context for Q CLI
+- ⚡ **Instant Setup** - Full AI development environment in ~60 seconds
+
+### Environment Lifecycle States
+
+The secure-agent tracks environments through their complete lifecycle:
+
+- **🟢 ACTIVE** - Container running and ready to use
+  - Actions: `activate` (enter), `suspend` (stop), `destroy` (remove)
+
+- **🟡 SUSPENDED** - Container exists but stopped
+  - Actions: `activate` (start), `destroy` (remove)
+
+- **🔵 CONFIGURED** - Compose file exists, ready to create container
+  - Actions: `activate` (create & start), `create` (recreate)
+
+- **🔵 RECREATABLE** - Project files available, can recreate environment
+  - Actions: `create` (setup environment)
+
+- **⚪ NOT FOUND** - No environment or project files exist
+  - Actions: `create` (setup new environment)
+
+### Lifecycle-Aware Listing
+
+```bash
+secure-agent list
+```
+
+Shows environments grouped by state:
+```
+🟢 ACTIVE ENVIRONMENTS (with containers):
+   Project              Status                    Created
+   -------              ------                    -------
+   my-active-project    Up 2 hours               2025-08-18 10:30:15
+
+🟡 SUSPENDED ENVIRONMENTS (containers stopped):
+   Project              Status                    Created
+   -------              ------                    -------
+   my-suspended-proj    Exited (0) 1 hour ago    2025-08-18 09:15:22
+
+🔵 RECREATABLE ENVIRONMENTS (project files available):
+   Project              Last Modified             .amazonq Config
+   -------              -------------             ---------------
+   old-project          2025-08-15 14:30          ✅ Present
+   archived-work        2025-08-10 09:45          ✅ Present
+```
+
+### Detailed Environment Status
+
+```bash
+secure-agent status <project>
+```
+
+Provides comprehensive environment information:
+```
+Environment Status: my-project
+=================================
+
+📁 PROJECT DIRECTORY:
+   Location: ~/Documents/Source/my-project
+   Status: ✅ Present
+   Last Modified: 2025-08-18 10:30:15
+   .amazonq Config: ✅ Present (secure-agent project)
+   MCP Config: ✅ Present
+   Contents: 15 items
+   Size: 2.3M
+
+🐳 DOCKER ENVIRONMENT:
+   Container: ✅ Present (secure-ai-my-project)
+   Status: Up 2 hours
+   Created: 2025-08-18 08:15:30
+   Image: secure-ai-agent:latest
+   State: 🟢 Running
+   Resource Usage:
+   CPU: 0.5%  Memory: 256MB / 2GB  Network: 1.2kB / 856B
+
+⚙️  CONFIGURATION:
+   Compose File: ✅ Present
+   Location: ~/.secure-agent/docker-compose-my-project.yml
+   Size: 1.8K
+
+🎯 ENVIRONMENT STATE:
+   Status: 🟢 ACTIVE - Container running and ready
+   Actions: activate (enter), suspend (stop), destroy (remove)
 ```
 
 ### Inside Container

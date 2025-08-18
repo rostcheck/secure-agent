@@ -4,7 +4,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECTS_DIR="$HOME/Source"
+PROJECTS_DIR="$HOME/Documents/Source"
 DOCKER_IMAGE="secure-ai-agent:latest"
 
 # Ensure projects directory exists
@@ -15,14 +15,22 @@ usage() {
 Usage: secure-agent <command> [options] [project-name]
 
 Commands:
-    create <project-name>     Create new project environment
-    activate <project-name>   Activate existing project
-    suspend <project-name>    Stop container, preserve state
-    destroy <project-name>    Remove container and volumes
-    list                      List all project environments
-    sync <project-name>       Manual sync files
-    status <project-name>     Show environment status
+    create <project-name>     Create new project environment or recreate existing
+    attach <project-name>     Attach existing project to secure-agent (adds AI infrastructure)
+    prepare <project-name>    Create compose file for recreatable project (RECREATABLE → CONFIGURED)
+    activate <project-name>   Activate/start existing project environment (auto-prepares if needed)
+    suspend <project-name>    Stop container, preserve state and configuration
+    destroy <project-name>    Remove container and configuration (keeps project files)
+    list                      List all environments by lifecycle state
+    status <project-name>     Show detailed environment status and lifecycle info
     debug <project-name>      Debug environment (show mounts, paths, etc.)
+
+Environment Lifecycle:
+    🟢 ACTIVE      - Container running, ready to use
+    🟡 SUSPENDED   - Container stopped, can be reactivated
+    🔵 CONFIGURED  - Compose file exists, ready to create container
+    🔵 RECREATABLE - Project files exist, can recreate environment
+    ⚪ NOT FOUND   - No environment or project files
 
 Options:
     -h, --help               Show this help message
@@ -30,10 +38,14 @@ Options:
     --rebuild                Rebuild container image
 
 Examples:
-    secure-agent create my-project
-    secure-agent activate my-project
-    secure-agent debug my-project
-    secure-agent suspend my-project
+    secure-agent create my-project      # Create new environment
+    secure-agent attach existing-proj   # Add secure-agent to existing project
+    secure-agent list                   # Show all environments by state
+    secure-agent prepare old-project    # Prepare recreatable project for activation
+    secure-agent activate my-project    # Start/enter environment (auto-prepares if needed)
+    secure-agent status my-project      # Check environment lifecycle state
+    secure-agent suspend my-project     # Stop but keep configuration
+    secure-agent destroy my-project     # Remove container (keeps files)
 EOF
 }
 
@@ -113,18 +125,66 @@ create_environment() {
     echo "To activate: secure-agent activate $project_name"
 }
 
+recreate_compose_file() {
+    local project_name="$1"
+    local project_dir="$PROJECTS_DIR/$project_name"
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    
+    # Verify project directory exists and is a secure-agent project
+    if [[ ! -d "$project_dir" ]]; then
+        echo "Error: Project directory does not exist: $project_dir"
+        return 1
+    fi
+    
+    if [[ ! -d "$project_dir/.amazonq" ]]; then
+        echo "Error: Not a secure-agent project (missing .amazonq directory)"
+        return 1
+    fi
+    
+    echo "Recreating compose file for '$project_name'..."
+    
+    # Create docker-compose file for this project
+    export PROJECT_NAME="$project_name"
+    export HOST_PROJECT_DIR="$project_dir"
+    envsubst < "$SCRIPT_DIR/docker/docker-compose.yml.template" > "$compose_file"
+    
+    if [[ -f "$compose_file" ]]; then
+        echo "✓ Compose file recreated: $compose_file"
+        return 0
+    else
+        echo "Error: Failed to create compose file"
+        return 1
+    fi
+}
+
 activate_environment() {
     local project_name="$1"
     local container_name="secure-ai-$project_name"
     local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local project_dir="$PROJECTS_DIR/$project_name"
     
     echo "Activating secure environment '$project_name'..."
     
-    # Check if compose file exists
-    if [ ! -f "$compose_file" ]; then
-        echo "Error: Environment '$project_name' does not exist"
-        echo "Create it first: secure-agent create $project_name"
-        exit 1
+    # Check if compose file exists, if not try to recreate it for RECREATABLE projects
+    if [[ ! -f "$compose_file" ]]; then
+        if [[ -d "$project_dir/.amazonq" ]]; then
+            echo "Environment is in RECREATABLE state - recreating compose file..."
+            if ! recreate_compose_file "$project_name"; then
+                echo "Error: Failed to recreate compose file"
+                echo "Try: secure-agent create $project_name"
+                exit 1
+            fi
+        else
+            echo "Error: Environment '$project_name' does not exist"
+            echo "Create it first: secure-agent create $project_name"
+            exit 1
+        fi
+    fi
+    
+    # Ensure base image exists
+    if ! docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^$DOCKER_IMAGE$"; then
+        echo "Base image not found, building..."
+        build_image
     fi
     
     # Start container if stopped
@@ -134,8 +194,18 @@ activate_environment() {
             docker-compose -f "$compose_file" start
             sleep 3
         else
-            echo "Error: Container not found. Try recreating the environment."
-            exit 1
+            echo "Container not found, creating new container..."
+            docker-compose -f "$compose_file" up -d
+            
+            # Wait for container to be ready
+            echo "Waiting for container to initialize..."
+            sleep 5
+            
+            # Set up Q CLI configuration for newly created container
+            "$SCRIPT_DIR/scripts/setup-q-config.sh" "$project_name"
+            
+            # Set up encrypted keychain for newly created container
+            "$SCRIPT_DIR/scripts/setup-keychain.sh" "$project_name"
         fi
     fi
     
@@ -182,7 +252,7 @@ destroy_environment() {
     fi
     
     echo "WARNING: This will permanently delete the environment and all container data."
-    echo "Project files in ~/Source/$project_name will be preserved."
+    echo "Project files in ~/Documents/Source/$project_name will be preserved."
     read -p "Type '$project_name' to confirm: " confirmation
     
     if [ "$confirmation" != "$project_name" ]; then
@@ -199,20 +269,121 @@ destroy_environment() {
     rm -f "$compose_file"
     
     echo "✓ Environment destroyed"
-    echo "Project files preserved in ~/Source/$project_name"
+    echo "Project files preserved in ~/Documents/Source/$project_name"
 }
 
 list_environments() {
     echo "Secure AI Environments:"
     echo "======================"
     
-    # List containers
-    if docker ps -a --filter "name=secure-ai-" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}" | grep -q "secure-ai-"; then
-        docker ps -a --filter "name=secure-ai-" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}" | \
-            sed 's/secure-ai-//g' | \
-            sed '1s/NAMES/PROJECT/'
+    # Get all projects with .amazonq directories (secure-agent projects)
+    local secure_agent_projects=()
+    while IFS= read -r -d '' project_path; do
+        project_name=$(basename "$(dirname "$project_path")")
+        secure_agent_projects+=("$project_name")
+    done < <(find "$PROJECTS_DIR" -maxdepth 2 -name ".amazonq" -type d -print0 2>/dev/null)
+    
+    # Get active containers
+    local active_containers=()
+    while IFS= read -r container_name; do
+        if [[ "$container_name" =~ ^secure-ai-(.+)$ ]]; then
+            active_containers+=("${BASH_REMATCH[1]}")
+        fi
+    done < <(docker ps -a --filter "name=secure-ai-" --format "{{.Names}}" 2>/dev/null)
+    
+    # Get compose files (suspended/configured environments)
+    local compose_environments=()
+    for compose_file in "$SCRIPT_DIR"/docker-compose-*.yml; do
+        if [[ -f "$compose_file" ]]; then
+            if [[ "$compose_file" =~ docker-compose-(.+)\.yml$ ]]; then
+                compose_environments+=("${BASH_REMATCH[1]}")
+            fi
+        fi
+    done
+    
+    local found_any=false
+    
+    # 1. Active Environments (with containers)
+    if [[ ${#active_containers[@]} -gt 0 ]]; then
+        echo ""
+        echo "🟢 ACTIVE ENVIRONMENTS (with containers):"
+        echo "   Project              Status                    Created"
+        echo "   -------              ------                    -------"
+        
+        for project in "${active_containers[@]}"; do
+            local container_name="secure-ai-$project"
+            local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}" 2>/dev/null)
+            local created=$(docker ps -a --filter "name=$container_name" --format "{{.CreatedAt}}" 2>/dev/null)
+            printf "   %-20s %-25s %s\n" "$project" "$status" "$created"
+        done
+        found_any=true
+    fi
+    
+    # 2. Configured Environments (with compose files but no containers)
+    local configured_only=()
+    for project in "${compose_environments[@]}"; do
+        if [[ ! " ${active_containers[*]} " =~ " $project " ]]; then
+            configured_only+=("$project")
+        fi
+    done
+    
+    if [[ ${#configured_only[@]} -gt 0 ]]; then
+        echo ""
+        echo "🟡 CONFIGURED ENVIRONMENTS (ready to activate):"
+        echo "   Project              Compose File              Project Directory"
+        echo "   -------              ------------              -----------------"
+        
+        for project in "${configured_only[@]}"; do
+            local compose_file="$SCRIPT_DIR/docker-compose-$project.yml"
+            local project_dir="$PROJECTS_DIR/$project"
+            local dir_status="❌ Missing"
+            [[ -d "$project_dir" ]] && dir_status="✅ Present"
+            printf "   %-20s %-25s %s\n" "$project" "$(basename "$compose_file")" "$dir_status"
+        done
+        found_any=true
+    fi
+    
+    # 3. Recreatable Environments (project directories without containers/compose)
+    local recreatable=()
+    for project in "${secure_agent_projects[@]}"; do
+        if [[ ! " ${active_containers[*]} " =~ " $project " ]] && [[ ! " ${compose_environments[*]} " =~ " $project " ]]; then
+            recreatable+=("$project")
+        fi
+    done
+    
+    if [[ ${#recreatable[@]} -gt 0 ]]; then
+        echo ""
+        echo "🔵 RECREATABLE ENVIRONMENTS (project files available):"
+        echo "   Project              Last Modified             .amazonq Config"
+        echo "   -------              -------------             ---------------"
+        
+        for project in "${recreatable[@]}"; do
+            local project_dir="$PROJECTS_DIR/$project"
+            local last_modified="Unknown"
+            local amazonq_status="❌ Missing"
+            
+            if [[ -d "$project_dir" ]]; then
+                last_modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$project_dir" 2>/dev/null || echo "Unknown")
+                [[ -d "$project_dir/.amazonq" ]] && amazonq_status="✅ Present"
+            fi
+            
+            printf "   %-20s %-25s %s\n" "$project" "$last_modified" "$amazonq_status"
+        done
+        found_any=true
+    fi
+    
+    # 4. Summary and actions
+    if [[ "$found_any" == true ]]; then
+        echo ""
+        echo "📋 ACTIONS:"
+        echo "   • activate <project>  - Start/enter active environment"
+        echo "   • create <project>    - Create new or recreate existing project"
+        echo "   • suspend <project>   - Stop container, keep configuration"
+        echo "   • destroy <project>   - Remove container and compose file"
+        echo "   • status <project>    - Show detailed environment status"
     else
-        echo "No environments found."
+        echo ""
+        echo "No secure-agent environments found."
         echo "Create one with: secure-agent create <project-name>"
     fi
 }
@@ -220,26 +391,293 @@ list_environments() {
 status_environment() {
     local project_name="$1"
     local container_name="secure-ai-$project_name"
+    local project_dir="$PROJECTS_DIR/$project_name"
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
     
     echo "Environment Status: $project_name"
     echo "================================="
+    echo ""
     
-    if docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
-        echo "Status: Running"
-        echo ""
-        docker stats "$container_name" --no-stream --format "table {{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"
-    elif docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$"; then
-        echo "Status: Stopped"
-        echo "Use 'secure-agent activate $project_name' to start"
+    # Check project directory
+    echo "📁 PROJECT DIRECTORY:"
+    if [[ -d "$project_dir" ]]; then
+        echo "   Location: $project_dir"
+        echo "   Status: ✅ Present"
+        echo "   Last Modified: $(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$project_dir" 2>/dev/null || echo "Unknown")"
+        
+        # Check for secure-agent markers
+        if [[ -d "$project_dir/.amazonq" ]]; then
+            echo "   .amazonq Config: ✅ Present (secure-agent project)"
+            local mcp_config="$project_dir/.amazonq/mcp.json"
+            [[ -f "$mcp_config" ]] && echo "   MCP Config: ✅ Present" || echo "   MCP Config: ❌ Missing"
+        else
+            echo "   .amazonq Config: ❌ Missing (not a secure-agent project)"
+        fi
+        
+        # Show directory contents
+        echo "   Contents: $(ls -1 "$project_dir" | wc -l | tr -d ' ') items"
+        echo "   Size: $(du -sh "$project_dir" 2>/dev/null | cut -f1 || echo "Unknown")"
     else
-        echo "Status: Not found"
-        echo "Use 'secure-agent create $project_name' to create"
+        echo "   Status: ❌ Missing"
+        echo "   Location: $project_dir (would be created)"
+    fi
+    
+    echo ""
+    echo "🐳 DOCKER ENVIRONMENT:"
+    
+    # Check container
+    if docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        local status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}")
+        local created=$(docker ps -a --filter "name=$container_name" --format "{{.CreatedAt}}")
+        local image=$(docker ps -a --filter "name=$container_name" --format "{{.Image}}")
+        
+        echo "   Container: ✅ Present ($container_name)"
+        echo "   Status: $status"
+        echo "   Created: $created"
+        echo "   Image: $image"
+        
+        if docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+            echo "   State: 🟢 Running"
+            echo ""
+            echo "   Resource Usage:"
+            docker stats "$container_name" --no-stream --format "   CPU: {{.CPUPerc}}  Memory: {{.MemUsage}}  Network: {{.NetIO}}"
+        else
+            echo "   State: 🟡 Stopped"
+        fi
+    else
+        echo "   Container: ❌ Not found"
+    fi
+    
+    # Check compose file
+    echo ""
+    echo "⚙️  CONFIGURATION:"
+    if [[ -f "$compose_file" ]]; then
+        echo "   Compose File: ✅ Present"
+        echo "   Location: $compose_file"
+        echo "   Size: $(ls -lh "$compose_file" | awk '{print $5}')"
+    else
+        echo "   Compose File: ❌ Not found"
+        echo "   Location: $compose_file (would be created)"
+    fi
+    
+    # Determine overall state and suggest actions
+    echo ""
+    echo "🎯 ENVIRONMENT STATE:"
+    
+    local has_container=$(docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$" && echo "true" || echo "false")
+    local has_compose=$([[ -f "$compose_file" ]] && echo "true" || echo "false")
+    local has_project=$([[ -d "$project_dir" ]] && echo "true" || echo "false")
+    local is_running=$(docker ps --format "table {{.Names}}" | grep -q "^$container_name$" && echo "true" || echo "false")
+    
+    if [[ "$is_running" == "true" ]]; then
+        echo "   Status: 🟢 ACTIVE - Container running and ready"
+        echo "   Actions: activate (enter), suspend (stop), destroy (remove)"
+    elif [[ "$has_container" == "true" ]]; then
+        echo "   Status: 🟡 SUSPENDED - Container exists but stopped"
+        echo "   Actions: activate (start), destroy (remove)"
+    elif [[ "$has_compose" == "true" ]]; then
+        echo "   Status: 🔵 CONFIGURED - Ready to create container"
+        echo "   Actions: activate (create & start), create (recreate)"
+    elif [[ "$has_project" == "true" ]]; then
+        echo "   Status: 🔵 RECREATABLE - Project files available"
+        echo "   Actions: create (setup environment)"
+    else
+        echo "   Status: ⚪ NOT FOUND - No environment or project files"
+        echo "   Actions: create (setup new environment)"
+    fi
+}
+
+attach_environment() {
+    local project_name="$1"
+    local project_dir="$PROJECTS_DIR/$project_name"
+    local container_name="secure-ai-$project_name"
+    
+    echo "Attaching existing project '$project_name' to secure-agent..."
+    
+    # Check if project directory exists
+    if [[ ! -d "$project_dir" ]]; then
+        echo "Error: Project directory does not exist: $project_dir"
+        echo "Available projects in $PROJECTS_DIR:"
+        ls -1 "$PROJECTS_DIR" | head -10
+        exit 1
+    fi
+    
+    # Check if it's already a secure-agent project
+    if [[ -d "$project_dir/.amazonq" ]]; then
+        echo "Warning: This project already appears to be a secure-agent project"
+        echo "Found existing .amazonq directory"
+        read -p "Continue anyway? This will overwrite existing secure-agent configuration (y/N): " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "Attach cancelled"
+            exit 0
+        fi
+    fi
+    
+    # Check if container already exists
+    if docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        echo "Error: Container '$container_name' already exists"
+        echo "Use 'secure-agent destroy $project_name' first, or choose a different name"
+        exit 1
+    fi
+    
+    echo ""
+    echo "📁 PROJECT ANALYSIS:"
+    echo "   Location: $project_dir"
+    echo "   Size: $(du -sh "$project_dir" 2>/dev/null | cut -f1 || echo "Unknown")"
+    echo "   Files: $(find "$project_dir" -type f | wc -l | tr -d ' ') files"
+    echo "   Directories: $(find "$project_dir" -type d | wc -l | tr -d ' ') directories"
+    
+    # Detect project type
+    local project_type="Unknown"
+    local detected_features=()
+    
+    [[ -f "$project_dir/package.json" ]] && project_type="Node.js" && detected_features+=("package.json")
+    [[ -f "$project_dir/requirements.txt" ]] && project_type="Python" && detected_features+=("requirements.txt")
+    [[ -f "$project_dir/Pipfile" ]] && project_type="Python (Pipenv)" && detected_features+=("Pipfile")
+    [[ -f "$project_dir/pyproject.toml" ]] && project_type="Python (Modern)" && detected_features+=("pyproject.toml")
+    [[ -f "$project_dir/Cargo.toml" ]] && project_type="Rust" && detected_features+=("Cargo.toml")
+    [[ -f "$project_dir/go.mod" ]] && project_type="Go" && detected_features+=("go.mod")
+    [[ -f "$project_dir/pom.xml" ]] && project_type="Java (Maven)" && detected_features+=("pom.xml")
+    [[ -f "$project_dir/build.gradle" ]] && project_type="Java (Gradle)" && detected_features+=("build.gradle")
+    [[ -f "$project_dir/Dockerfile" ]] && detected_features+=("Dockerfile")
+    [[ -f "$project_dir/docker-compose.yml" ]] && detected_features+=("docker-compose.yml")
+    [[ -d "$project_dir/.git" ]] && detected_features+=("Git repository")
+    
+    echo "   Detected Type: $project_type"
+    if [[ ${#detected_features[@]} -gt 0 ]]; then
+        echo "   Features: ${detected_features[*]}"
+    fi
+    
+    echo ""
+    read -p "Proceed with attaching this project to secure-agent? (y/N): " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "Attach cancelled"
+        exit 0
+    fi
+    
+    echo ""
+    echo "🔧 SETTING UP SECURE-AGENT INFRASTRUCTURE:"
+    
+    # Create .amazonq directory structure
+    echo "   Creating .amazonq configuration..."
+    mkdir -p "$project_dir/.amazonq/rules"
+    
+    # Copy secure-agent template files
+    echo "   Installing Q CLI context files..."
+    cp "$SCRIPT_DIR/docker/templates/AmazonQ.md" "$project_dir/"
+    cp "$SCRIPT_DIR/docker/templates/project-setup.md" "$project_dir/.amazonq/rules/"
+    cp "$SCRIPT_DIR/docker/templates/workspace-mcp.json" "$project_dir/.amazonq/mcp.json"
+    
+    # Create a project-specific context file
+    echo "   Creating project-specific context..."
+    cat > "$project_dir/.amazonq/project-context.md" << EOF
+# $project_name - Project Context
+
+## Project Information
+- **Name**: $project_name
+- **Type**: $project_type
+- **Attached**: $(date)
+- **Location**: $project_dir
+
+## Detected Features
+$(for feature in "${detected_features[@]}"; do echo "- $feature"; done)
+
+## Project Structure
+\`\`\`
+$(find "$project_dir" -maxdepth 2 -type f -name "*.md" -o -name "*.txt" -o -name "*.json" -o -name "*.yml" -o -name "*.yaml" -o -name "*.toml" -o -name "*.py" -o -name "*.js" -o -name "*.ts" | head -20 | sed "s|$project_dir/||")
+\`\`\`
+
+## Development Notes
+- This project was attached to secure-agent on $(date)
+- Original project files preserved
+- Secure-agent infrastructure added for AI-powered development
+EOF
+    
+    echo "   ✓ Secure-agent infrastructure installed"
+    
+    # Build base image if needed
+    if ! docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^$DOCKER_IMAGE$"; then
+        echo ""
+        echo "🐳 BUILDING DOCKER IMAGE:"
+        build_image
+    fi
+    
+    # Create docker-compose file
+    echo ""
+    echo "🐳 CREATING CONTAINER ENVIRONMENT:"
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    export PROJECT_NAME="$project_name"
+    export HOST_PROJECT_DIR="$project_dir"
+    envsubst < "$SCRIPT_DIR/docker/docker-compose.yml.template" > "$compose_file"
+    
+    # Create and start container
+    echo "   Creating container..."
+    docker-compose -f "$compose_file" up -d
+    
+    # Wait for container to be ready
+    echo "   Waiting for container to initialize..."
+    sleep 5
+    
+    # Set up Q CLI configuration
+    echo "   Setting up Q CLI configuration..."
+    "$SCRIPT_DIR/scripts/setup-q-config.sh" "$project_name"
+    
+    # Set up encrypted keychain
+    echo "   Setting up encrypted keychain..."
+    "$SCRIPT_DIR/scripts/setup-keychain.sh" "$project_name"
+    
+    echo ""
+    echo "✅ PROJECT SUCCESSFULLY ATTACHED!"
+    echo ""
+    echo "📋 WHAT WAS ADDED:"
+    echo "   • .amazonq/ directory with Q CLI configuration"
+    echo "   • AmazonQ.md with work principles"
+    echo "   • MCP configuration for Perplexity search"
+    echo "   • Project-specific context file"
+    echo "   • Docker container environment"
+    echo ""
+    echo "🚀 NEXT STEPS:"
+    echo "   1. Activate environment: secure-agent activate $project_name"
+    echo "   2. Inside container: q login"
+    echo "   3. Start AI-powered development: q chat"
+    echo ""
+    echo "📁 Your original project files are unchanged and preserved!"
+    echo "   Location: $project_dir"
+}
+
+prepare_environment() {
+    local project_name="$1"
+    local project_dir="$PROJECTS_DIR/$project_name"
+    
+    echo "Preparing environment configuration for '$project_name'..."
+    
+    # Check if project directory exists
+    if [[ ! -d "$project_dir" ]]; then
+        echo "Error: Project directory does not exist: $project_dir"
+        echo "Create the project first: secure-agent create $project_name"
+        exit 1
+    fi
+    
+    # Check if it's a secure-agent project
+    if [[ ! -d "$project_dir/.amazonq" ]]; then
+        echo "Error: Not a secure-agent project (missing .amazonq directory)"
+        echo "This appears to be a regular project directory."
+        echo "Use 'secure-agent create $project_name' to set up secure-agent configuration."
+        exit 1
+    fi
+    
+    # Recreate compose file
+    if recreate_compose_file "$project_name"; then
+        echo "✓ Environment '$project_name' prepared successfully"
+        echo "State changed: RECREATABLE → CONFIGURED"
+        echo "You can now use: secure-agent activate $project_name"
+    else
+        echo "Error: Failed to prepare environment"
+        exit 1
     fi
 }
 
 debug_environment() {
-    local project_name="$1"
-    local container_name="secure-ai-$project_name"
     local project_dir="$PROJECTS_DIR/$project_name"
     local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
     
@@ -342,6 +780,14 @@ case "${1:-}" in
     create)
         [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
         create_environment "$2"
+        ;;
+    attach)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        attach_environment "$2"
+        ;;
+    prepare)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        prepare_environment "$2"
         ;;
     activate)
         [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }

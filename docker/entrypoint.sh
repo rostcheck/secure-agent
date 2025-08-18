@@ -74,7 +74,7 @@ else
     echo "Warning: Homebrew not found in PATH"
 fi
 
-# Set up Q CLI environment and qp alias
+# Set up Q CLI environment
 if [ -f ~/.config/q/current_context.md ]; then
     echo "✓ Q CLI configuration found"
 else
@@ -90,15 +90,24 @@ echo "  Keyring: /home/aiuser/.local/share/keyrings"
 
 # Check for API keys in keyring
 echo ""
-echo "Checking API keys..."
+echo "Checking stored credentials..."
 python3 -c "
 import keyring
 try:
+    # Check Perplexity API key
     key = keyring.get_password('perplexity-api', 'default')
     if key and len(key) > 0:
         print(f'✓ Perplexity API key available: {key[:8]}...{key[-4:]} (length: {len(key)})')
     else:
         print('Warning: Perplexity API key not found in keyring')
+    
+    # Check AWS Q login URL
+    url = keyring.get_password('aws-q-login-url', 'default')
+    if url and url.startswith('https://'):
+        print(f'✓ AWS Q Professional license URL available: {url[:30]}...')
+    else:
+        print('Info: No AWS Q Professional license URL (will use Builder ID)')
+        
 except Exception as e:
     print(f'Warning: Could not check keyring: {e}')
 " 2>/dev/null || echo "Warning: Could not check keyring status"
@@ -106,9 +115,14 @@ except Exception as e:
 echo ""
 echo "Environment initialization complete"
 echo "Working directory: $(pwd)"
-echo "Available commands: python, python3, node, npm, git, q, qp, brew"
-echo "Use 'qp' to start Q CLI with work principles loaded"
-echo "Use 'ls /home/aiuser/workspace' to see your project files"
+echo "Available commands: python, python3, node, npm, git, q, brew"
+echo ""
+echo "🚀 Q CLI Usage:"
+echo "  q login  - Login to Q CLI (choose Builder ID or Professional)"
+echo "  q chat   - Start Q chat (after login)"
+echo "  q doctor - Check Q CLI status"
+echo ""
+echo "📁 Project files: ls /home/aiuser/workspace"
 echo ""
 
 # If no command specified, keep container running
