@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     unzip \
     ca-certificates \
+    ca-certificates \
     software-properties-common \
     sudo \
     file \
@@ -109,9 +110,25 @@ RUN echo 'export PATH="/home/aiuser/.local/bin:$PATH"' >> ~/.bashrc
 # Source Homebrew environment for this build
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"
 
-# Create aliases and Q CLI placeholder
+# Create aliases and auto-login setup
 RUN echo 'alias python=python3' >> ~/.bashrc
-RUN echo 'alias qp="echo \"Q CLI not installed yet. Run: sudo apt update && curl -sSf https://desktop-release.q.us-east-1.amazonaws.com/latest/amazon-q.deb -o /tmp/q.deb && sudo apt install -y /tmp/q.deb\""' >> ~/.bashrc
+
+# Add auto-login logic to both bashrc and bash_profile for login shells
+RUN echo '' >> ~/.bashrc && \
+    echo '# Auto Q CLI login for interactive sessions' >> ~/.bashrc && \
+    echo 'if [[ $- == *i* ]] && [[ -t 0 ]] && [[ -z "$AUTO_LOGIN_DONE" ]]; then' >> ~/.bashrc && \
+    echo '    export AUTO_LOGIN_DONE=1' >> ~/.bashrc && \
+    echo '    if [[ -f /home/aiuser/auto-q-login.sh ]]; then' >> ~/.bashrc && \
+    echo '        echo "🚀 Starting automatic Q CLI login..."' >> ~/.bashrc && \
+    echo '        /home/aiuser/auto-q-login.sh' >> ~/.bashrc && \
+    echo '    fi' >> ~/.bashrc && \
+    echo 'fi' >> ~/.bashrc
+
+# Also add to .bash_profile for login shells (used by secure-agent activate)
+RUN echo '# Source bashrc for login shells' >> ~/.bash_profile && \
+    echo 'if [ -f ~/.bashrc ]; then' >> ~/.bash_profile && \
+    echo '    source ~/.bashrc' >> ~/.bash_profile && \
+    echo 'fi' >> ~/.bash_profile
 
 # Note: Q CLI will be installed manually after container creation due to GUI dependency issues
 

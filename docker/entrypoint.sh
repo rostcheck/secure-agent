@@ -112,15 +112,114 @@ except Exception as e:
     print(f'Warning: Could not check keyring: {e}')
 " 2>/dev/null || echo "Warning: Could not check keyring status"
 
+# Create auto-login script
+cat > /home/aiuser/auto-q-login.sh << 'EOF'
+#!/bin/bash
+# auto-q-login.sh - Automatic Q CLI login and chat startup
+
+set -e
+
+echo "🔐 Checking Q CLI authentication status..."
+
+# Check if Q CLI is available
+if ! command -v q >/dev/null 2>&1; then
+    echo "❌ Q CLI not found. Please ensure Q CLI is installed."
+    return 1
+fi
+
+# Check if already logged in by trying to start q chat with a timeout
+# If logged in, q chat will start; if not, it will fail with login error
+if timeout 2s bash -c 'echo "" | q chat' 2>&1 | grep -q "You are not logged in"; then
+    # Got "not logged in" error, so we need to login
+    echo "🔑 Not logged in, attempting automatic login..."
+else
+    # Either q chat started successfully or some other error (assume logged in)
+    echo "✅ Already logged in to Q CLI"
+    echo "🚀 Starting Q chat..."
+    exec q chat
+    return 0
+fi
+
+# Try to get AWS Q login URL from keyring
+AWS_Q_URL=""
+if command -v python3 >/dev/null 2>&1; then
+    AWS_Q_URL=$(python3 -c "
+import keyring
+from keyrings.alt.file import PlaintextKeyring
+try:
+    keyring.set_keyring(PlaintextKeyring())
+    url = keyring.get_password('aws-q-login-url', 'default')
+    if url and url.startswith('https://'):
+        print(url)
+    else:
+        print('')
+except:
+    print('')
+" 2>/dev/null)
+fi
+
+if [ -n "$AWS_Q_URL" ]; then
+    echo "🏢 Found Q Professional license URL"
+    echo "📋 Identity Center URL: ${AWS_Q_URL:0:40}..."
+    echo ""
+    echo "⚠️  IMPORTANT: AWS Q Professional requires Identity Center authentication"
+    echo "   Please complete authentication in your browser when prompted"
+    echo ""
+    echo "⏳ Starting Q login with professional license..."
+    
+    # Use yes command to automatically send empty lines (accept defaults)
+    # The Q CLI will use the provided --identity-provider and --region as defaults
+    if yes "" | q login --license pro --identity-provider "$AWS_Q_URL" --region us-east-1 --use-device-flow; then
+        echo "✅ Q CLI login successful!"
+        echo "🚀 Starting Q chat..."
+        exec q chat
+    else
+        echo "❌ Q CLI professional login failed"
+        echo ""
+        echo "💡 This might be because:"
+        echo "   • You're not logged into the AWS console"
+        echo "   • The Identity Center URL is incorrect"
+        echo "   • Network connectivity issues"
+        echo ""
+        echo "🔄 Falling back to Builder ID login..."
+        if q login --license free; then
+            echo "✅ Q CLI login successful with Builder ID!"
+            echo "🚀 Starting Q chat..."
+            exec q chat
+        else
+            echo "❌ All login attempts failed"
+            echo "💡 You can try manual login with: q login"
+            return 1
+        fi
+    fi
+else
+    echo "🔨 No professional license URL found, using Builder ID login"
+    echo "⏳ Starting Q login..."
+    
+    if q login --license free; then
+        echo "✅ Q CLI login successful!"
+        echo "🚀 Starting Q chat..."
+        exec q chat
+    else
+        echo "❌ Q CLI login failed"
+        echo "💡 You can try manual login with: q login"
+        return 1
+    fi
+fi
+EOF
+
+chmod +x /home/aiuser/auto-q-login.sh
+
 echo ""
 echo "Environment initialization complete"
 echo "Working directory: $(pwd)"
 echo "Available commands: python, python3, node, npm, git, q, brew"
 echo ""
-echo "🚀 Q CLI Usage:"
-echo "  q login  - Login to Q CLI (choose Builder ID or Professional)"
-echo "  q chat   - Start Q chat (after login)"
-echo "  q doctor - Check Q CLI status"
+echo "🚀 Q CLI Auto-Login:"
+echo "  • Auto-login will run when you enter an interactive shell"
+echo "  • Uses Professional license if URL is configured"
+echo "  • Falls back to Builder ID if needed"
+echo "  • Manual login: q login"
 echo ""
 echo "📁 Project files: ls /home/aiuser/workspace"
 echo ""
