@@ -127,13 +127,12 @@ if ! command -v q >/dev/null 2>&1; then
     return 1
 fi
 
-# Check if already logged in by trying to start q chat with a timeout
-# If logged in, q chat will start; if not, it will fail with login error
-if timeout 2s bash -c 'echo "" | q chat' 2>&1 | grep -q "You are not logged in"; then
-    # Got "not logged in" error, so we need to login
+# Check if already logged in using q whoami
+if q whoami 2>&1 | grep -q "Not logged in"; then
+    # Got "Not logged in" error, so we need to login
     echo "🔑 Not logged in, attempting automatic login..."
 else
-    # Either q chat started successfully or some other error (assume logged in)
+    # q whoami shows we're authenticated
     echo "✅ Already logged in to Q CLI"
     echo "🚀 Starting Q chat..."
     exec q chat

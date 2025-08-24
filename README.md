@@ -333,6 +333,61 @@ exit
 secure-agent destroy mcp-test
 ```
 
+## 🛠️ Custom Q CLI Builds
+
+The secure-agent supports using custom Q CLI builds (e.g., with bug fixes or modifications) instead of the default installation.
+
+### Setup Custom Q CLI
+
+```bash
+# 1. Build your custom Q CLI for Linux x86_64
+cd /path/to/amazon-q-cli
+CARGO_PROFILE_RELEASE_DEBUG=false \
+CARGO_PROFILE_RELEASE_LTO=thin \
+CARGO_PROFILE_RELEASE_INCREMENTAL=false \
+CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+CARGO_PROFILE_RELEASE_PANIC=abort \
+cargo build --release --target-dir target-optimized
+
+# 2. Create symlink in secure-agent directory
+cd secure-agent
+mkdir -p custom-binaries
+ln -s /path/to/amazon-q-cli/target-optimized/release/chat_cli custom-binaries/q-cli-x86_64-linux
+ln -s custom-binaries/q-cli-x86_64-linux custom-q-cli
+
+# 3. Rebuild container image
+./scripts/build-image.sh
+```
+
+### How It Works
+
+- **Detection**: Build script checks for `custom-q-cli` symlink
+- **Integration**: If present, copies custom binary into container during build
+- **Fallback**: If absent, uses default Q CLI package installation
+- **Architecture**: Supports multiple architectures via `custom-binaries/q-cli-<arch>` naming
+- **Version Control**: Custom binaries are gitignored, only symlinks tracked
+
+### Build Optimization
+
+Custom builds can be significantly optimized:
+
+| Build Type | Size | Debug Info | Use Case |
+|------------|------|------------|----------|
+| Default (development) | 311M | Full symbols | Development/debugging |
+| AWS Official | 99M | Line tables | Standard distribution |
+| **Optimized (recommended)** | **40M** | None | Production containers |
+
+### Custom Binary Structure
+
+```
+secure-agent/
+├── custom-binaries/           # gitignored directory
+│   ├── q-cli-x86_64-linux   # Linux x86_64 binary (symlink)
+│   └── q-cli-arm64-linux     # Linux ARM64 binary (if needed)
+├── custom-q-cli -> custom-binaries/q-cli-x86_64-linux  # convenience symlink
+└── scripts/build-image.sh    # detects and uses custom binary
+```
+
 ## 🔧 Project Structure
 
 ```
@@ -340,6 +395,8 @@ secure-agent/
 ├── secure-agent                 # Main CLI script
 ├── install.sh                  # Installation script
 ├── README.md                   # This file
+├── custom-q-cli                # Symlink to custom Q CLI binary (optional)
+├── custom-binaries/            # Custom Q CLI binaries (gitignored)
 ├── docker/
 │   ├── Dockerfile              # Container image with Q CLI + MCP
 │   ├── entrypoint.sh           # Container initialization
@@ -354,7 +411,7 @@ secure-agent/
 │       ├── mcp.json           # Global MCP configuration
 │       └── workspace-mcp.json  # Workspace MCP configuration
 └── scripts/
-    ├── build-image.sh          # Docker image builder
+    ├── build-image.sh          # Docker image builder (supports custom Q CLI)
     ├── setup-q-config.sh       # Q CLI configuration setup
     └── setup-keychain.sh       # Encrypted keyring setup
 ```

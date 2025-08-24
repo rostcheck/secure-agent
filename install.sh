@@ -1,12 +1,13 @@
 #!/bin/bash
-# install.sh - Install secure-agent CLI without sudo
+# install-symlink.sh - Install secure-agent CLI using symlinks (cleaner approach)
 
 set -e
 
 INSTALL_DIR="$HOME/.local/bin"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_SCRIPT="$SOURCE_DIR/secure-agent"
 
-echo "Installing Secure AI Agent CLI..."
+echo "Installing Secure AI Agent CLI (symlink approach)..."
 
 # Check if Docker is installed
 if ! command -v docker &> /dev/null; then
@@ -36,22 +37,27 @@ fi
 # Create ~/.local/bin if it doesn't exist
 mkdir -p "$INSTALL_DIR"
 
-# Copy secure-agent to user's local bin (no sudo needed)
-echo "Installing secure-agent command to ~/.local/bin..."
-cp "$SOURCE_DIR/secure-agent" "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/secure-agent"
+# Remove existing installation (copy or symlink)
+if [[ -f "$INSTALL_DIR/secure-agent" ]] || [[ -L "$INSTALL_DIR/secure-agent" ]]; then
+    echo "Removing existing secure-agent installation..."
+    rm "$INSTALL_DIR/secure-agent"
+fi
 
-# Create ~/.secure-agent directory for configuration
-mkdir -p "$HOME/.secure-agent"
-cp -r "$SOURCE_DIR/docker" "$HOME/.secure-agent/"
-cp -r "$SOURCE_DIR/scripts" "$HOME/.secure-agent/"
+# Remove old ~/.secure-agent directory if it exists (from copy-based install)
+if [[ -d "$HOME/.secure-agent" ]]; then
+    echo "Removing old ~/.secure-agent directory (copy-based install)..."
+    rm -rf "$HOME/.secure-agent"
+fi
 
-# Update paths in the installed script
-sed -i '' "s|SCRIPT_DIR=\".*\"|SCRIPT_DIR=\"$HOME/.secure-agent\"|" "$INSTALL_DIR/secure-agent"
+# Create symlink to source script
+echo "Creating symlink: $INSTALL_DIR/secure-agent -> $SOURCE_SCRIPT"
+ln -s "$SOURCE_SCRIPT" "$INSTALL_DIR/secure-agent"
 
-echo "✓ Installation complete"
+echo "✓ Installation complete (symlink approach)"
 echo ""
-echo "The secure-agent command is installed to: $INSTALL_DIR/secure-agent"
+echo "The secure-agent command is symlinked to: $SOURCE_SCRIPT"
+echo "✓ Always uses latest version from source directory"
+echo "✓ No sync issues between installed and development versions"
 
 # Check if ~/.local/bin is in PATH
 if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
@@ -61,6 +67,11 @@ else
     echo "Add this to your ~/.bash_profile or ~/.zshrc:"
     echo "    export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
+
+echo ""
+echo "⚠️  IMPORTANT: Keep the source directory at:"
+echo "    $SOURCE_DIR"
+echo "    Moving or deleting it will break the symlink."
 
 echo ""
 echo "Usage:"

@@ -1,6 +1,9 @@
 # Dockerfile for secure AI agent environment
 FROM ubuntu:22.04
 
+# Build argument for custom Q CLI binary
+ARG USE_CUSTOM_Q=false
+
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -32,23 +35,28 @@ RUN apt-get update && apt-get install -y \
     libfuse2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Q CLI during build (requires x86_64 architecture)
-RUN echo "Installing Q CLI via official Debian package..." && \
-    # Download Q CLI package
-    curl --proto '=https' --tlsv1.2 -sSf https://desktop-release.q.us-east-1.amazonaws.com/latest/amazon-q.deb -o /tmp/amazon-q.deb && \
-    # Install GUI dependencies required by Q CLI
-    apt-get update && \
-    apt-get install -y \
-        libgtk-3-0 \
-        libwebkit2gtk-4.1-0 \
-        libayatana-appindicator3-1 \
-    && \
-    # Install Q CLI
-    apt-get install -y /tmp/amazon-q.deb && \
-    # Clean up
-    rm /tmp/amazon-q.deb && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    echo "Q CLI pre-installation complete"
+# Install Q CLI - either custom binary or official package
+RUN if [ "$USE_CUSTOM_Q" = "true" ]; then \
+        echo "Preparing for custom Q CLI binary installation..."; \
+        echo "Custom Q CLI will be installed from build context after user creation"; \
+    else \
+        echo "Installing Q CLI via official Debian package..."; \
+        # Download Q CLI package \
+        curl --proto '=https' --tlsv1.2 -sSf https://desktop-release.q.us-east-1.amazonaws.com/latest/amazon-q.deb -o /tmp/amazon-q.deb && \
+        # Install GUI dependencies required by Q CLI \
+        apt-get update && \
+        apt-get install -y \
+            libgtk-3-0 \
+            libwebkit2gtk-4.1-0 \
+            libayatana-appindicator3-1 \
+        && \
+        # Install Q CLI \
+        apt-get install -y /tmp/amazon-q.deb && \
+        # Clean up \
+        rm /tmp/amazon-q.deb && \
+        apt-get clean && rm -rf /var/lib/apt/lists/* && \
+        echo "Q CLI official installation complete"; \
+    fi
 
 # Install Python packages for MCP server
 RUN pip3 install --no-cache-dir httpx keyring
@@ -96,6 +104,22 @@ RUN mkdir -p /home/aiuser/workspace \
     /home/aiuser/.amazonq/rules \
     && chown -R aiuser:aiuser /home/aiuser
 
+# Install custom Q CLI binary if provided
+COPY custom-q-cli* /tmp/
+RUN if [ "$USE_CUSTOM_Q" = "true" ] && [ -f /tmp/custom-q-cli ]; then \
+        echo "Installing custom Q CLI binary..."; \
+        cp /tmp/custom-q-cli /usr/bin/q && \
+        chmod +x /usr/bin/q && \
+        rm /tmp/custom-q-cli && \
+        echo "✓ Custom Q CLI binary installed to /usr/bin/q"; \
+        # Verify the binary \
+        file /usr/bin/q && \
+        ls -lh /usr/bin/q; \
+    elif [ "$USE_CUSTOM_Q" = "true" ]; then \
+        echo "⚠ Custom Q CLI requested but binary not found in build context"; \
+        exit 1; \
+    fi
+
 # Switch to non-root user
 USER aiuser
 WORKDIR /home/aiuser
@@ -130,7 +154,7 @@ RUN echo '# Source bashrc for login shells' >> ~/.bash_profile && \
     echo '    source ~/.bashrc' >> ~/.bash_profile && \
     echo 'fi' >> ~/.bash_profile
 
-# Note: Q CLI will be installed manually after container creation due to GUI dependency issues
+# Note: Q CLI installation method depends on USE_CUSTOM_Q build arg
 
 # Copy entry point script
 COPY --chown=aiuser:aiuser entrypoint.sh /home/aiuser/

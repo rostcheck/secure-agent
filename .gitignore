@@ -1,3 +1,12 @@
 .DS_Store
 *~
 
+# Custom Q CLI binaries (symlinks are OK, but not the actual binaries)
+custom-binaries/
+custom-q-cli
+
+# Local configuration
+local-config.yml
+
+# IDE
+.idea/

@@ -3,7 +3,14 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get the directory of this script, following symlinks
+if [[ -L "${BASH_SOURCE[0]}" ]]; then
+    # Script is a symlink, follow it to get the real source directory
+    SCRIPT_DIR="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}")")" && pwd)"
+else
+    # Script is not a symlink, use normal resolution
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 PROJECTS_DIR="$HOME/Documents/Source"
 DOCKER_IMAGE="secure-ai-agent:latest"
 
