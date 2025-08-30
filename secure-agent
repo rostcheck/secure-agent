@@ -26,6 +26,7 @@ Commands:
     attach <project-name>     Attach existing project to secure-agent (adds AI infrastructure)
     prepare <project-name>    Create compose file for recreatable project (RECREATABLE → CONFIGURED)
     activate <project-name>   Activate/start existing project environment (auto-prepares if needed)
+    terminal <project-name>   Enter container shell without running Q CLI commands
     suspend <project-name>    Stop container, preserve state and configuration
     destroy <project-name>    Remove container and configuration (keeps project files)
     list                      List all environments by lifecycle state
@@ -50,6 +51,7 @@ Examples:
     secure-agent list                   # Show all environments by state
     secure-agent prepare old-project    # Prepare recreatable project for activation
     secure-agent activate my-project    # Start/enter environment (auto-prepares if needed)
+    secure-agent terminal my-project    # Enter shell without Q CLI setup
     secure-agent status my-project      # Check environment lifecycle state
     secure-agent suspend my-project     # Stop but keep configuration
     secure-agent destroy my-project     # Remove container (keeps files)
@@ -223,6 +225,68 @@ activate_environment() {
     
     # Enter interactive shell
     docker exec -it "$container_name" /bin/bash -c "cd /home/aiuser/workspace && exec bash -l"
+}
+
+terminal_environment() {
+    local project_name="$1"
+    local container_name="secure-ai-$project_name"
+    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local project_dir="$PROJECTS_DIR/$project_name"
+    
+    echo "Opening terminal for environment '$project_name'..."
+    
+    # Check if compose file exists, if not try to recreate it for RECREATABLE projects
+    if [[ ! -f "$compose_file" ]]; then
+        if [[ -d "$project_dir/.amazonq" ]]; then
+            echo "Environment is in RECREATABLE state - recreating compose file..."
+            if ! recreate_compose_file "$project_name"; then
+                echo "Error: Failed to recreate compose file"
+                echo "Try: secure-agent create $project_name"
+                exit 1
+            fi
+        else
+            echo "Error: Environment '$project_name' does not exist"
+            echo "Create it first: secure-agent create $project_name"
+            exit 1
+        fi
+    fi
+    
+    # Ensure base image exists
+    if ! docker images --format "table {{.Repository}}:{{.Tag}}" | grep -q "^$DOCKER_IMAGE$"; then
+        echo "Base image not found, building..."
+        build_image
+    fi
+    
+    # Start container if stopped
+    if ! docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        if docker ps -a --format "table {{.Names}}" | grep -q "^$container_name$"; then
+            echo "Starting existing container..."
+            docker-compose -f "$compose_file" start
+            sleep 3
+        else
+            echo "Container not found, creating new container..."
+            docker-compose -f "$compose_file" up -d
+            
+            # Wait for container to be ready
+            echo "Waiting for container to initialize..."
+            sleep 5
+            
+            # Set up Q CLI configuration for newly created container
+            "$SCRIPT_DIR/scripts/setup-q-config.sh" "$project_name"
+            
+            # Set up encrypted keychain for newly created container
+            "$SCRIPT_DIR/scripts/setup-keychain.sh" "$project_name"
+        fi
+    fi
+    
+    echo "Opening terminal session..."
+    echo "Working directory: /home/aiuser/workspace"
+    echo "Type 'exit' to return to host system"
+    echo ""
+    
+    # Enter interactive shell directly without Q CLI setup
+    # Set AUTO_LOGIN_DONE=1 to prevent automatic Q CLI login
+    docker exec -it "$container_name" /bin/bash -c "cd /home/aiuser/workspace && export AUTO_LOGIN_DONE=1 && exec bash -l"
 }
 
 suspend_environment() {
@@ -799,6 +863,10 @@ case "${1:-}" in
     activate)
         [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
         activate_environment "$2"
+        ;;
+    terminal)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        terminal_environment "$2"
         ;;
     suspend)
         [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }

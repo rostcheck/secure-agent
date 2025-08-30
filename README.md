@@ -168,6 +168,7 @@ secure-agent create <project>     # Create new environment or recreate existing
 secure-agent attach <project>     # Add secure-agent to existing project (non-destructive)
 secure-agent prepare <project>    # Create compose file for recreatable project (RECREATABLE → CONFIGURED)
 secure-agent activate <project>   # Enter/start container environment (auto-prepares if needed)
+secure-agent terminal <project>   # Login to container, without starting a chat session
 secure-agent list                 # List all environments by lifecycle state
 secure-agent status <project>     # Show detailed environment status
 secure-agent suspend <project>    # Stop container, preserve configuration

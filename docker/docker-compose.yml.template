@@ -1,3 +1,5 @@
+name: secure-agent-${PROJECT_NAME}
+
 services:
   secure-ai-agent:
     image: secure-ai-agent:latest
