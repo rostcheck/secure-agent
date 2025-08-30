@@ -5,12 +5,12 @@ A secure, isolated development environment that combines Amazon Q CLI with Perpl
 ## 🚀 Features
 
 - **🔒 Complete Isolation**: Each project runs in its own Docker container with access only to its specific files
-- **🔐 Keyring Security**: Encrypted keyring storage for API keys with persistent container volumes
-- **🧠 AI-Powered Development**: Pre-installed Amazon Q CLI v1.13.1 with authentication support
+- **🔐 Secure Key Management**: API keys stored in macOS keychain and injected into containers as needed
+- **🧠 AI-Powered Development**: Pre-installed Amazon Q CLI with auto-login support
 - **🌐 Live Web Search**: Perplexity AI integration via MCP for current information and research
 - **📋 Work Principles Integration**: Automatic setup of development standards and context
-- **🛠️ Full Development Stack**: Python 3.10.12, Node.js, Git, and all standard development tools
-- **⚡ Zero Setup**: Everything pre-configured - just create, authenticate, and code
+- **🛠️ Full Development Stack**: Python, Node.js, Git, and all standard development tools
+- **⚡ Zero Setup**: Everything pre-configured - just create, register keys, and code
 
 ## 🎯 Quick Start
 
@@ -19,7 +19,6 @@ A secure, isolated development environment that combines Amazon Q CLI with Perpl
 - Docker Desktop for Mac
 - docker-compose
 - envsubst (install with `brew install gettext`)
-- Perplexity API key stored in macOS keychain
 
 ### Installation
 
@@ -30,30 +29,30 @@ cd secure-agent
 
 This installs the `secure-agent` command to `~/.local/bin/` (no sudo required).
 
-### Setup API Key
+### Setup API Keys
 
-Store your Perplexity API key in macOS keychain:
+Register your Perplexity API key:
 
 ```bash
-# Add Perplexity API key to keychain
-security add-generic-password -s "perplexity-api" -a "default" -w "your-perplexity-api-key"
+# Register Perplexity API key in macOS keychain
+secure-agent register-key perplexity "your-perplexity-api-key"
 ```
 
 ### Usage
 
 ```bash
-# Create a new project environment (everything pre-configured)
+# Create a new project environment
 secure-agent create my-ai-project
 
-# Activate the environment
+# Activate the environment (drops directly into Q chat with auto-login)
 secure-agent activate my-ai-project
 
-# Inside container - authenticate Q CLI
-q login
+# You're now in Q chat - start asking questions
+"Search for the latest Python security best practices"
+"What are the current trends in containerization?"
 
-# Start using Q CLI with Perplexity search
-q chat "Search for the latest Python security best practices"
-q chat "What are the current trends in containerization?"
+# To get a terminal without Q chat, use:
+secure-agent terminal my-ai-project
 
 # List all environments
 secure-agent list
@@ -62,18 +61,59 @@ secure-agent list
 secure-agent destroy my-ai-project
 ```
 
+## 🔑 API Key Management
+
+Secure-agent provides a secure way to manage API keys without exposing them in chat transcripts:
+
+### Register Keys
+```bash
+# Store API keys in macOS keychain
+secure-agent register-key perplexity "your-perplexity-api-key"
+secure-agent register-key mapquest "your-mapquest-api-key"
+secure-agent register-key geocoding "your-geocoding-api-key"
+```
+
+### Inject Keys into Containers
+```bash
+# Inject keys into running containers as needed
+secure-agent inject-key mapquest my-project
+secure-agent inject-key geocoding my-project
+
+# Q CLI agent can now access keys without transcript exposure
+"Get coordinates for downtown Nashville using MapQuest"
+```
+
+### Manage Keys
+```bash
+# List registered keys in macOS keychain
+secure-agent list-keys
+
+# List injected keys in a specific container
+secure-agent list-keys my-project
+
+# Remove keys from keychain
+secure-agent remove-key mapquest
+```
+
+### How It Works
+- Keys stored securely in macOS keychain (host-side encryption)
+- Keys can be injected into a container keyring while the container is running
+- MCP servers access keys via `keyring.get_password('service-api', 'default')`
+- Keys never appear in Q CLI chat transcripts
+- Each container has isolated keyring storage
+
 ## 🏗️ Architecture
 
 ### Container Components
 
 ```
 Docker Container (833MB)
-├── Amazon Q CLI v1.13.1 (pre-installed)
+├── Amazon Q CLI (pre-installed, auto-login)
 ├── Perplexity MCP Server (custom implementation)
-├── Python 3.10.12 + development tools
+├── Python + development tools
 ├── Node.js + npm
 ├── Git + standard utilities
-├── Encrypted keyring for API keys
+├── Container keyring for API keys
 └── Pre-configured Q CLI profiles and context
 ```
 
@@ -89,33 +129,11 @@ Q CLI (MCP Client)
 └── Handles user permission prompts for tool usage
 
 Perplexity MCP Server
-├── Retrieves API key from encrypted keyring
+├── Retrieves API key from container keyring
 ├── Handles persistent stdin/stdout communication
 ├── Processes JSON-RPC requests (initialize, tools/list, tools/call)
 ├── Makes HTTPS calls to api.perplexity.ai
 └── Returns formatted search results with citations
-```
-
-### File Structure
-
-```
-Host System:
-~/Documents/Source/my-project/
-├── AmazonQ.md                    # Work principles and project context
-├── .amazonq/
-│   ├── mcp.json                  # MCP server configuration
-│   └── rules/
-│       └── project-setup.md     # Development standards
-└── README.md                     # Project documentation
-
-Container:
-├── ~/.aws/amazonq/
-│   ├── agents/default.json      # Clean agent configuration
-│   ├── mcp.json                 # Global MCP configuration
-│   └── profiles/default/context.json  # Profile with workspace paths
-├── /opt/mcp-servers/
-│   └── perplexity-server.py     # MCP server implementation
-└── /home/aiuser/workspace/      # Mounted project directory
 ```
 
 ## 🔧 How It Works
@@ -127,14 +145,13 @@ secure-agent create my-project
 ├── Copies pre-configured Q CLI context files
 ├── Copies MCP configuration for Perplexity integration
 ├── Starts Docker container with pre-built image
-├── Sets up encrypted keyring with API keys
+├── Sets up container keyring with API keys
 └── Ready for Q CLI authentication
 ```
 
 ### 2. Q CLI Integration
 ```bash
-q login  # Authenticate with AWS Builder ID
-q chat   # Automatically loads MCP servers
+secure-agent activate my-project  # Drops directly into Q chat
 ├── ✓ perplexity-search loaded in ~0.6s
 ├── ✓ 1 of 1 mcp servers initialized
 └── Ready for AI-powered development with web search
@@ -142,7 +159,8 @@ q chat   # Automatically loads MCP servers
 
 ### 3. MCP Tool Usage
 ```bash
-q chat "Search for Docker security practices"
+# After secure-agent activate, you're directly in Q chat
+"Search for Docker security practices"
 ├── Q CLI recognizes search intent
 ├── Offers to use perplexity_search tool
 ├── User approves tool usage (y/n/t for trust)
@@ -154,7 +172,7 @@ q chat "Search for Docker security practices"
 ## 🛡️ Security Model
 
 - **🔒 Container Isolation**: Each project isolated from host system and other projects
-- **🔐 Encrypted Storage**: API keys stored in encrypted keyring, never plaintext
+- **🔐 Keyring Storage**: API keys stored in container keyring, never plaintext files
 - **👤 User Permission**: Explicit approval required for external tool usage
 - **🌐 Network Security**: Only HTTPS connections to authorized APIs
 - **🔑 Authentication**: AWS Builder ID required for Q CLI access
@@ -166,8 +184,7 @@ q chat "Search for Docker security practices"
 ```bash
 secure-agent create <project>     # Create new environment or recreate existing
 secure-agent attach <project>     # Add secure-agent to existing project (non-destructive)
-secure-agent prepare <project>    # Create compose file for recreatable project (RECREATABLE → CONFIGURED)
-secure-agent activate <project>   # Enter/start container environment (auto-prepares if needed)
+secure-agent activate <project>   # Enter/start container environment (auto-login)
 secure-agent terminal <project>   # Login to container, without starting a chat session
 secure-agent list                 # List all environments by lifecycle state
 secure-agent status <project>     # Show detailed environment status
@@ -175,122 +192,24 @@ secure-agent suspend <project>    # Stop container, preserve configuration
 secure-agent destroy <project>    # Remove container, keep project files
 ```
 
-### Attach Existing Projects
-
-The `attach` command brings existing software projects into the secure-agent ecosystem:
-
+### API Key Management
 ```bash
-# Attach any existing project
-secure-agent attach my-existing-project
-
-# What it does:
-# ✅ Analyzes project structure and detects features
-# ✅ Adds .amazonq/ directory with AI configuration
-# ✅ Installs Q CLI context and MCP setup
-# ✅ Creates Docker container environment
-# ✅ Preserves ALL original project files (non-destructive)
-
-# Then activate and use
-secure-agent activate my-existing-project
-# Inside container: q login && q chat
-```
-
-**Attach Features:**
-- 🔍 **Smart Detection** - Recognizes Python, Node.js, Rust, Go, Java projects
-- 🛡️ **Non-Destructive** - Never modifies existing files
-- 🤖 **AI Context** - Auto-generates project-specific context for Q CLI
-- ⚡ **Instant Setup** - Full AI development environment in ~60 seconds
-
-### Environment Lifecycle States
-
-The secure-agent tracks environments through their complete lifecycle:
-
-- **🟢 ACTIVE** - Container running and ready to use
-  - Actions: `activate` (enter), `suspend` (stop), `destroy` (remove)
-
-- **🟡 SUSPENDED** - Container exists but stopped
-  - Actions: `activate` (start), `destroy` (remove)
-
-- **🔵 CONFIGURED** - Compose file exists, ready to create container
-  - Actions: `activate` (create & start), `create` (recreate)
-
-- **🔵 RECREATABLE** - Project files available, can recreate environment
-  - Actions: `create` (setup environment)
-
-- **⚪ NOT FOUND** - No environment or project files exist
-  - Actions: `create` (setup new environment)
-
-### Lifecycle-Aware Listing
-
-```bash
-secure-agent list
-```
-
-Shows environments grouped by state:
-```
-🟢 ACTIVE ENVIRONMENTS (with containers):
-   Project              Status                    Created
-   -------              ------                    -------
-   my-active-project    Up 2 hours               2025-08-18 10:30:15
-
-🟡 SUSPENDED ENVIRONMENTS (containers stopped):
-   Project              Status                    Created
-   -------              ------                    -------
-   my-suspended-proj    Exited (0) 1 hour ago    2025-08-18 09:15:22
-
-🔵 RECREATABLE ENVIRONMENTS (project files available):
-   Project              Last Modified             .amazonq Config
-   -------              -------------             ---------------
-   old-project          2025-08-15 14:30          ✅ Present
-   archived-work        2025-08-10 09:45          ✅ Present
-```
-
-### Detailed Environment Status
-
-```bash
-secure-agent status <project>
-```
-
-Provides comprehensive environment information:
-```
-Environment Status: my-project
-=================================
-
-📁 PROJECT DIRECTORY:
-   Location: ~/Documents/Source/my-project
-   Status: ✅ Present
-   Last Modified: 2025-08-18 10:30:15
-   .amazonq Config: ✅ Present (secure-agent project)
-   MCP Config: ✅ Present
-   Contents: 15 items
-   Size: 2.3M
-
-🐳 DOCKER ENVIRONMENT:
-   Container: ✅ Present (secure-ai-my-project)
-   Status: Up 2 hours
-   Created: 2025-08-18 08:15:30
-   Image: secure-ai-agent:latest
-   State: 🟢 Running
-   Resource Usage:
-   CPU: 0.5%  Memory: 256MB / 2GB  Network: 1.2kB / 856B
-
-⚙️  CONFIGURATION:
-   Compose File: ✅ Present
-   Location: ~/.secure-agent/docker-compose-my-project.yml
-   Size: 1.8K
-
-🎯 ENVIRONMENT STATE:
-   Status: 🟢 ACTIVE - Container running and ready
-   Actions: activate (enter), suspend (stop), destroy (remove)
+secure-agent register-key <service> <key>    # Store API key in macOS keychain
+secure-agent inject-key <service> <project>  # Inject key into container keyring
+secure-agent list-keys [project]             # List registered or injected keys
+secure-agent remove-key <service>            # Remove key from macOS keychain
 ```
 
 ### Inside Container
 ```bash
-q login                          # Authenticate Q CLI
-q chat "message"                 # Chat with AI (includes MCP tools)
-q chat "search for X"           # Triggers Perplexity search
-q doctor                        # Check Q CLI status
+# After secure-agent activate (drops into Q chat):
+"message"                        # Chat with AI (includes MCP tools)
+"search for X"                   # Triggers Perplexity search
 /mcp                            # Show MCP server status in chat
+
+# After secure-agent terminal (shell access):
+q chat "message"                 # Start Q chat session
+q doctor                        # Check Q CLI status
 ```
 
 ## 🧪 Testing
@@ -304,10 +223,11 @@ secure-agent activate test-project
 # Inside container - test components
 q --version                      # Should show: q 1.13.1
 python3 --version               # Should show: Python 3.10.12
-python3 -c "import keyring; print('✓ Keyring works')"
 
 # Test API key access
-python3 -c "import keyring; key = keyring.get_password('perplexity-api', 'default'); print(f'✓ API key: {key[:8]}...{key[-4:]}')"
+secure-agent register-key test-api "test-key-12345"
+secure-agent inject-key test-api test-project
+secure-agent list-keys test-project
 
 # Exit and cleanup
 exit
@@ -317,17 +237,15 @@ secure-agent destroy test-project
 ### MCP Integration Test
 ```bash
 secure-agent create mcp-test
+secure-agent register-key perplexity "your-api-key"
 secure-agent activate mcp-test
 
-# Authenticate Q CLI
-q login
-
-# Test MCP server loading
-q chat "Hello, what tools do you have?"
+# Test MCP server loading (you're already in Q chat)
+"Hello, what tools do you have?"
 # Should show: ✓ perplexity-search loaded in ~0.6s
 
 # Test Perplexity search
-q chat "Search for the latest AI developments"
+"Search for the latest AI developments"
 # Should offer to use perplexity_search tool
 
 exit
@@ -336,85 +254,20 @@ secure-agent destroy mcp-test
 
 ## 🛠️ Custom Q CLI Builds
 
-The secure-agent supports using custom Q CLI builds (e.g., with bug fixes or modifications) instead of the default installation.
-
-### Setup Custom Q CLI
+The secure-agent supports using custom Q CLI builds for development:
 
 ```bash
 # 1. Build your custom Q CLI for Linux x86_64
 cd /path/to/amazon-q-cli
-CARGO_PROFILE_RELEASE_DEBUG=false \
-CARGO_PROFILE_RELEASE_LTO=thin \
-CARGO_PROFILE_RELEASE_INCREMENTAL=false \
-CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
-CARGO_PROFILE_RELEASE_PANIC=abort \
 cargo build --release --target-dir target-optimized
 
 # 2. Create symlink in secure-agent directory
 cd secure-agent
 mkdir -p custom-binaries
 ln -s /path/to/amazon-q-cli/target-optimized/release/chat_cli custom-binaries/q-cli-x86_64-linux
-ln -s custom-binaries/q-cli-x86_64-linux custom-q-cli
 
 # 3. Rebuild container image
 ./scripts/build-image.sh
-```
-
-### How It Works
-
-- **Detection**: Build script checks for `custom-q-cli` symlink
-- **Integration**: If present, copies custom binary into container during build
-- **Fallback**: If absent, uses default Q CLI package installation
-- **Architecture**: Supports multiple architectures via `custom-binaries/q-cli-<arch>` naming
-- **Version Control**: Custom binaries are gitignored, only symlinks tracked
-
-### Build Optimization
-
-Custom builds can be significantly optimized:
-
-| Build Type | Size | Debug Info | Use Case |
-|------------|------|------------|----------|
-| Default (development) | 311M | Full symbols | Development/debugging |
-| AWS Official | 99M | Line tables | Standard distribution |
-| **Optimized (recommended)** | **40M** | None | Production containers |
-
-### Custom Binary Structure
-
-```
-secure-agent/
-├── custom-binaries/           # gitignored directory
-│   ├── q-cli-x86_64-linux   # Linux x86_64 binary (symlink)
-│   └── q-cli-arm64-linux     # Linux ARM64 binary (if needed)
-├── custom-q-cli -> custom-binaries/q-cli-x86_64-linux  # convenience symlink
-└── scripts/build-image.sh    # detects and uses custom binary
-```
-
-## 🔧 Project Structure
-
-```
-secure-agent/
-├── secure-agent                 # Main CLI script
-├── install.sh                  # Installation script
-├── README.md                   # This file
-├── custom-q-cli                # Symlink to custom Q CLI binary (optional)
-├── custom-binaries/            # Custom Q CLI binaries (gitignored)
-├── docker/
-│   ├── Dockerfile              # Container image with Q CLI + MCP
-│   ├── entrypoint.sh           # Container initialization
-│   ├── docker-compose.yml.template
-│   ├── mcp-servers/
-│   │   └── perplexity-server.py  # MCP server implementation
-│   └── templates/
-│       ├── AmazonQ.md          # Work principles template
-│       ├── project-setup.md    # Development standards
-│       ├── default-agent.json  # Clean agent configuration
-│       ├── context.json        # Profile context template
-│       ├── mcp.json           # Global MCP configuration
-│       └── workspace-mcp.json  # Workspace MCP configuration
-└── scripts/
-    ├── build-image.sh          # Docker image builder (supports custom Q CLI)
-    ├── setup-q-config.sh       # Q CLI configuration setup
-    └── setup-keychain.sh       # Encrypted keyring setup
 ```
 
 ## 🚨 Troubleshooting
@@ -426,9 +279,6 @@ docker ps
 
 # Rebuild image if needed
 ./scripts/build-image.sh
-
-# Check logs
-docker logs secure-ai-project-name
 ```
 
 ### Q CLI Authentication Issues
@@ -438,22 +288,15 @@ q doctor
 
 # Re-authenticate if needed
 q login
-
-# Check if MCP servers load
-q chat "test" # Should show MCP server initialization
 ```
 
 ### MCP Server Issues
 ```bash
-# Test MCP server directly
-echo '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}' | python3 /opt/mcp-servers/perplexity-server.py
-
 # Check API key access
 python3 -c "import keyring; print(keyring.get_password('perplexity-api', 'default'))"
 
 # Verify MCP configuration
 cat ~/.aws/amazonq/mcp.json
-cat /home/aiuser/workspace/.amazonq/mcp.json
 ```
 
 ### Keyring Issues
@@ -470,7 +313,7 @@ python3 -c "import keyring; print('✓ Keyring accessible')"
 When everything is working correctly, you should see:
 
 1. **Environment Creation**: `✓ Environment 'project-name' created successfully`
-2. **Q CLI Authentication**: `Device authorized` and `Logged in successfully`
+2. **Q CLI Auto-Login**: Automatic authentication on `activate`
 3. **MCP Server Loading**: `✓ perplexity-search loaded in 0.6s`
 4. **Tool Availability**: Q CLI offers to use `perplexity_search` for search queries
 5. **API Integration**: Successful Perplexity API calls with formatted results and citations
@@ -479,10 +322,10 @@ When everything is working correctly, you should see:
 
 This environment provides a complete AI-powered development setup with:
 - ✅ Secure, isolated project environments
-- ✅ Amazon Q CLI with professional license support
+- ✅ Amazon Q CLI with auto-login support
 - ✅ Live web search via Perplexity AI
 - ✅ Pre-configured work principles and development standards
-- ✅ Encrypted API key management
+- ✅ Secure API key management
 - ✅ Full development toolchain
 
 Perfect for AI-assisted development, research, and secure coding projects!
