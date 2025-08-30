@@ -2,6 +2,7 @@
 *~
 
 # Custom Q CLI binaries (symlinks are OK, but not the actual binaries)
+compose/
 custom-binaries/
 custom-q-cli
 

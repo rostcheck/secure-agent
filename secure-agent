@@ -17,6 +17,9 @@ DOCKER_IMAGE="secure-ai-agent:latest"
 # Ensure projects directory exists
 mkdir -p "$PROJECTS_DIR"
 
+# Ensure compose directory exists
+mkdir -p "$SCRIPT_DIR/compose"
+
 # Normalize service name for keychain storage
 normalize_service_name() {
     local service="$1"
@@ -133,7 +136,7 @@ create_environment() {
     fi
     
     # Create docker-compose file for this project
-    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     export PROJECT_NAME="$project_name"
     export HOST_PROJECT_DIR="$project_dir"
     envsubst < "$SCRIPT_DIR/docker/docker-compose.yml.template" > "$compose_file"
@@ -160,7 +163,7 @@ create_environment() {
 recreate_compose_file() {
     local project_name="$1"
     local project_dir="$PROJECTS_DIR/$project_name"
-    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     
     # Verify project directory exists and is a secure-agent project
     if [[ ! -d "$project_dir" ]]; then
@@ -192,7 +195,7 @@ recreate_compose_file() {
 activate_environment() {
     local project_name="$1"
     local container_name="secure-ai-$project_name"
-    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     local project_dir="$PROJECTS_DIR/$project_name"
     
     echo "Activating secure environment '$project_name'..."
@@ -253,7 +256,7 @@ activate_environment() {
 terminal_environment() {
     local project_name="$1"
     local container_name="secure-ai-$project_name"
-    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     local project_dir="$PROJECTS_DIR/$project_name"
     
     echo "Opening terminal for environment '$project_name'..."
@@ -315,7 +318,7 @@ terminal_environment() {
 suspend_environment() {
     local project_name="$1"
     local container_name="secure-ai-$project_name"
-    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     
     echo "Suspending environment '$project_name'..."
     
@@ -338,7 +341,7 @@ suspend_environment() {
 destroy_environment() {
     local project_name="$1"
     local container_name="secure-ai-$project_name"
-    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     
     if [ ! -f "$compose_file" ]; then
         echo "Error: Environment '$project_name' does not exist"
@@ -387,7 +390,7 @@ list_environments() {
     
     # Get compose files (suspended/configured environments)
     local compose_environments=()
-    for compose_file in "$SCRIPT_DIR"/docker-compose-*.yml; do
+    for compose_file in "$SCRIPT_DIR"/compose/docker-compose-*.yml; do
         if [[ -f "$compose_file" ]]; then
             if [[ "$compose_file" =~ docker-compose-(.+)\.yml$ ]]; then
                 compose_environments+=("${BASH_REMATCH[1]}")
@@ -428,7 +431,7 @@ list_environments() {
         echo "   -------              ------------              -----------------"
         
         for project in "${configured_only[@]}"; do
-            local compose_file="$SCRIPT_DIR/docker-compose-$project.yml"
+            local compose_file="$SCRIPT_DIR/compose/docker-compose-$project.yml"
             local project_dir="$PROJECTS_DIR/$project"
             local dir_status="❌ Missing"
             [[ -d "$project_dir" ]] && dir_status="✅ Present"
@@ -477,7 +480,7 @@ status_environment() {
     local project_name="$1"
     local container_name="secure-ai-$project_name"
     local project_dir="$PROJECTS_DIR/$project_name"
-    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     
     echo "Environment Status: $project_name"
     echo "================================="
@@ -690,7 +693,7 @@ EOF
     # Create docker-compose file
     echo ""
     echo "🐳 CREATING CONTAINER ENVIRONMENT:"
-    local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
+    local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     export PROJECT_NAME="$project_name"
     export HOST_PROJECT_DIR="$project_dir"
     envsubst < "$SCRIPT_DIR/docker/docker-compose.yml.template" > "$compose_file"
