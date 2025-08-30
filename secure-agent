@@ -17,6 +17,16 @@ DOCKER_IMAGE="secure-ai-agent:latest"
 # Ensure projects directory exists
 mkdir -p "$PROJECTS_DIR"
 
+# Normalize service name for keychain storage
+normalize_service_name() {
+    local service="$1"
+    if [[ "$service" == *-api ]]; then
+        echo "$service"
+    else
+        echo "$service-api"
+    fi
+}
+
 usage() {
     cat << EOF
 Usage: secure-agent <command> [options] [project-name]
@@ -32,6 +42,12 @@ Commands:
     list                      List all environments by lifecycle state
     status <project-name>     Show detailed environment status and lifecycle info
     debug <project-name>      Debug environment (show mounts, paths, etc.)
+
+API Key Management:
+    register-key <service> <key>        Store API key in macOS keychain
+    inject-key <service> <project>      Inject API key into container keyring
+    list-keys [project]                 List registered keys (or injected keys in project)
+    remove-key <service>                Remove API key from macOS keychain
 
 Environment Lifecycle:
     🟢 ACTIVE      - Container running, ready to use
@@ -55,6 +71,13 @@ Examples:
     secure-agent status my-project      # Check environment lifecycle state
     secure-agent suspend my-project     # Stop but keep configuration
     secure-agent destroy my-project     # Remove container (keeps files)
+
+API Key Examples:
+    secure-agent register-key mapquest "mq-api-key-12345"    # Store key in keychain
+    secure-agent inject-key mapquest my-project             # Inject into container
+    secure-agent list-keys                                  # Show registered keys
+    secure-agent list-keys my-project                       # Show injected keys
+    secure-agent remove-key mapquest                        # Remove from keychain
 EOF
 }
 
@@ -739,6 +762,187 @@ prepare_environment() {
     fi
 }
 
+register_key() {
+    local service="$1"
+    local key="$2"
+    
+    if [[ -z "$service" || -z "$key" ]]; then
+        echo "Usage: secure-agent register-key <service> <key>"
+        exit 1
+    fi
+    
+    local normalized_service=$(normalize_service_name "$service")
+    
+    echo "Registering API key for service '$service'..."
+    
+    # Store in macOS keychain
+    if security add-generic-password -s "$normalized_service" -a "default" -w "$key" -U 2>/dev/null; then
+        echo "✓ API key for '$service' stored in macOS keychain as '$normalized_service'"
+    else
+        echo "Error: Failed to store API key in macOS keychain"
+        exit 1
+    fi
+}
+
+inject_key() {
+    local service="$1"
+    local project_name="$2"
+    local container_name="secure-ai-$project_name"
+    
+    if [[ -z "$service" || -z "$project_name" ]]; then
+        echo "Usage: secure-agent inject-key <service> <project>"
+        exit 1
+    fi
+    
+    local normalized_service=$(normalize_service_name "$service")
+    
+    echo "Injecting API key for service '$service' into project '$project_name'..."
+    
+    # Check if container is running
+    if ! docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        echo "Error: Container '$container_name' is not running"
+        echo "Start it first: secure-agent activate $project_name"
+        exit 1
+    fi
+    
+    # Get API key from macOS keychain
+    local api_key=$(security find-generic-password -s "$normalized_service" -w 2>/dev/null || echo "")
+    
+    if [[ -z "$api_key" ]]; then
+        echo "Error: No API key found for service '$service' (looking for '$normalized_service')"
+        echo "Register it first: secure-agent register-key $service <your-key>"
+        exit 1
+    fi
+    
+    # Inject into container keyring
+    docker exec "$container_name" python3 -c "
+import keyring
+from keyrings.alt.file import PlaintextKeyring
+import sys
+
+try:
+    keyring.set_keyring(PlaintextKeyring())
+    keyring.set_password('$normalized_service', 'default', '$api_key')
+    print('✓ API key for \"$service\" injected into container keyring')
+except Exception as e:
+    print(f'Error injecting API key: {e}')
+    sys.exit(1)
+"
+    
+    # Verify injection
+    docker exec "$container_name" python3 -c "
+import keyring
+from keyrings.alt.file import PlaintextKeyring
+try:
+    keyring.set_keyring(PlaintextKeyring())
+    key = keyring.get_password('$normalized_service', 'default')
+    if key and len(key) > 4:
+        print('✓ Verification: Key accessible in container')
+        print(f'✓ Key preview: {key[:4]}...{key[-4:]} (length: {len(key)})')
+    else:
+        print('✗ Verification: Key not found in container')
+except Exception as e:
+    print(f'✗ Verification failed: {e}')
+"
+}
+
+list_keys() {
+    local project_name="$1"
+    
+    if [[ -z "$project_name" ]]; then
+        # List registered keys in macOS keychain
+        echo "Registered API Keys in macOS Keychain:"
+        echo "======================================"
+        
+        # Get all secure-agent related keychain items
+        local keys_found=false
+        while IFS= read -r line; do
+            if [[ "$line" == *-api ]]; then
+                local service_name="${line%-api}"
+                echo "  • $service_name (stored as: $line)"
+                keys_found=true
+            fi
+        done < <(security dump-keychain 2>/dev/null | grep -o '"[^"]*-api"' | tr -d '"' | sort -u)
+        
+        if [[ "$keys_found" == false ]]; then
+            echo "  No API keys found"
+            echo ""
+            echo "Register keys with: secure-agent register-key <service> <key>"
+        fi
+    else
+        # List injected keys in container
+        local container_name="secure-ai-$project_name"
+        
+        echo "Injected API Keys in Container '$project_name':"
+        echo "=============================================="
+        
+        if ! docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+            echo "  Container not running"
+            echo "  Start it first: secure-agent activate $project_name"
+            return
+        fi
+        
+        docker exec "$container_name" python3 -c "
+import keyring
+from keyrings.alt.file import PlaintextKeyring
+import os
+
+try:
+    keyring.set_keyring(PlaintextKeyring())
+    
+    # Common API services to check
+    common_services = [
+        'perplexity-api', 'mapquest-api', 'openai-api', 'geocoding-api', 
+        'google-maps-api', 'aws-api', 'anthropic-api', 'azure-api',
+        'aws-q-login-url'
+    ]
+    
+    found_keys = []
+    
+    # Check each common service
+    for service in common_services:
+        try:
+            key = keyring.get_password(service, 'default')
+            if key and len(key) > 0:
+                # Display name without -api suffix for cleaner output
+                display_name = service.replace('-api', '') if service.endswith('-api') and service != 'aws-q-login-url' else service
+                found_keys.append((display_name, service, len(key)))
+        except:
+            pass
+    
+    if found_keys:
+        for display_name, service, key_length in found_keys:
+            print(f'  • {display_name} (stored as: {service}, length: {key_length})')
+    else:
+        print('  No API keys found in container keyring')
+        print('  Inject keys with: secure-agent inject-key <service> $project_name')
+        
+except Exception as e:
+    print(f'  Error accessing container keyring: {e}')
+" 2>/dev/null || echo "  Error: Could not access container keyring"
+    fi
+}
+
+remove_key() {
+    local service="$1"
+    
+    if [[ -z "$service" ]]; then
+        echo "Usage: secure-agent remove-key <service>"
+        exit 1
+    fi
+    
+    local normalized_service=$(normalize_service_name "$service")
+    
+    echo "Removing API key for service '$service'..."
+    
+    # Remove from macOS keychain
+    if security delete-generic-password -s "$normalized_service" &>/dev/null; then
+        echo "✓ API key for '$service' removed from macOS keychain"
+    else
+        echo "Warning: API key for '$service' not found in macOS keychain (service: '$normalized_service')"
+    fi
+}
+
 debug_environment() {
     local project_dir="$PROJECTS_DIR/$project_name"
     local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
@@ -877,6 +1081,23 @@ case "${1:-}" in
     debug)
         [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
         debug_environment "$2"
+        ;;
+    register-key)
+        [ -z "$2" ] && { echo "Error: Service name required"; usage; exit 1; }
+        [ -z "$3" ] && { echo "Error: API key required"; usage; exit 1; }
+        register_key "$2" "$3"
+        ;;
+    inject-key)
+        [ -z "$2" ] && { echo "Error: Service name required"; usage; exit 1; }
+        [ -z "$3" ] && { echo "Error: Project name required"; usage; exit 1; }
+        inject_key "$2" "$3"
+        ;;
+    list-keys)
+        list_keys "$2"
+        ;;
+    remove-key)
+        [ -z "$2" ] && { echo "Error: Service name required"; usage; exit 1; }
+        remove_key "$2"
         ;;
     *)
         echo "Error: Unknown command '${1:-}'"
