@@ -443,16 +443,7 @@ list_environments() {
         found_any=true
     fi
     
-    # 4. Summary and actions
-    if [[ "$found_any" == true ]]; then
-        echo ""
-        echo "📋 ACTIONS:"
-        echo "   • activate <project>  - Start/enter active environment"
-        echo "   • create <project>    - Create new or recreate existing project"
-        echo "   • suspend <project>   - Stop container, keep configuration"
-        echo "   • destroy <project>   - Remove container and compose file"
-        echo "   • status <project>    - Show detailed environment status"
-    else
+    if [[ "$found_any" == false ]]; then
         echo ""
         echo "No secure-agent environments found."
         echo "Create one with: secure-agent create <project-name>"
