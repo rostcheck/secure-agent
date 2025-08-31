@@ -1,0 +1,39 @@
+#!/bin/bash
+# aws-creds - AWS credential helper for secure-agent
+# This script retrieves AWS credentials from keyring and sets environment variables
+
+# Function to get credential from keyring
+get_credential() {
+    local service="$1"
+    python3 -c "
+import keyring
+from keyrings.alt.file import PlaintextKeyring
+try:
+    keyring.set_keyring(PlaintextKeyring())
+    cred = keyring.get_password('$service', 'default')
+    if cred and cred.strip():
+        print(cred.strip())
+except:
+    pass
+" 2>/dev/null
+}
+
+# Set AWS environment variables
+export AWS_ACCESS_KEY_ID=$(get_credential "aws-access-key-api")
+export AWS_SECRET_ACCESS_KEY=$(get_credential "aws-secret-key-api")
+export AWS_SESSION_TOKEN=$(get_credential "aws-session-token-api")
+export AWS_DEFAULT_REGION=$(get_credential "aws-region-api")
+
+# Remove empty variables
+[ -z "$AWS_ACCESS_KEY_ID" ] && unset AWS_ACCESS_KEY_ID
+[ -z "$AWS_SECRET_ACCESS_KEY" ] && unset AWS_SECRET_ACCESS_KEY
+[ -z "$AWS_SESSION_TOKEN" ] && unset AWS_SESSION_TOKEN
+[ -z "$AWS_DEFAULT_REGION" ] && unset AWS_DEFAULT_REGION
+
+# Show status if credentials are loaded (only in interactive mode)
+if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+    if [ -t 1 ]; then
+        echo "✓ AWS credentials loaded from keyring"
+        [ -n "$AWS_DEFAULT_REGION" ] && echo "✓ AWS region: $AWS_DEFAULT_REGION"
+    fi
+fi

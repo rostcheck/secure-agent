@@ -209,6 +209,22 @@ EOF
 
 chmod +x /home/aiuser/auto-q-login.sh
 
+# Add AWS credential auto-loading to .bashrc (if aws-creds exists)
+if ! grep -q "aws-creds" /home/aiuser/.bashrc 2>/dev/null; then
+    echo "" >> /home/aiuser/.bashrc
+    echo "# Auto-load AWS credentials from keyring (if aws-creds exists)" >> /home/aiuser/.bashrc
+    echo "[ -f ~/workspace/.secure-agent/bin/aws-creds ] && source ~/workspace/.secure-agent/bin/aws-creds 2>/dev/null || true" >> /home/aiuser/.bashrc
+fi
+
+# Add .secure-agent/bin to PATH if directory exists
+if ! grep -q ".secure-agent/bin" /home/aiuser/.bashrc 2>/dev/null; then
+    echo "" >> /home/aiuser/.bashrc
+    echo "# Secure Agent Integration" >> /home/aiuser/.bashrc
+    echo "if [ -d ~/workspace/.secure-agent/bin ]; then" >> /home/aiuser/.bashrc
+    echo "    export PATH=\"~/workspace/.secure-agent/bin:\$PATH\"" >> /home/aiuser/.bashrc
+    echo "fi" >> /home/aiuser/.bashrc
+fi
+
 echo ""
 echo "Environment initialization complete"
 echo "Working directory: $(pwd)"

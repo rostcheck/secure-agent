@@ -51,6 +51,7 @@ API Key Management:
     inject-key <service> <project>      Inject API key into container keyring
     list-keys [project]                 List registered keys (or injected keys in project)
     remove-key <service>                Remove API key from macOS keychain
+    setup-aws <project>                 Setup AWS credentials and CLI in container
 
 Environment Lifecycle:
     🟢 ACTIVE      - Container running, ready to use
@@ -81,6 +82,7 @@ API Key Examples:
     secure-agent list-keys                                  # Show registered keys
     secure-agent list-keys my-project                       # Show injected keys
     secure-agent remove-key mapquest                        # Remove from keychain
+    secure-agent setup-aws my-project                       # Setup AWS credentials & CLI
 EOF
 }
 
@@ -149,11 +151,8 @@ create_environment() {
     echo "Waiting for container to initialize..."
     sleep 5
     
-    # Set up Q CLI configuration
-    "$SCRIPT_DIR/scripts/setup-q-config.sh" "$project_name"
-    
-    # Set up encrypted keychain
-    "$SCRIPT_DIR/scripts/setup-keychain.sh" "$project_name"
+    # Set up container with new consolidated script
+    "$SCRIPT_DIR/scripts/setup-container.sh" "$project_name"
     
     echo "✓ Environment '$project_name' created successfully"
     echo "Project directory: $project_dir"
@@ -236,11 +235,8 @@ activate_environment() {
             echo "Waiting for container to initialize..."
             sleep 5
             
-            # Set up Q CLI configuration for newly created container
-            "$SCRIPT_DIR/scripts/setup-q-config.sh" "$project_name"
-            
-            # Set up encrypted keychain for newly created container
-            "$SCRIPT_DIR/scripts/setup-keychain.sh" "$project_name"
+            # Set up container with new consolidated script
+            "$SCRIPT_DIR/scripts/setup-container.sh" "$project_name"
         fi
     fi
     
@@ -297,11 +293,8 @@ terminal_environment() {
             echo "Waiting for container to initialize..."
             sleep 5
             
-            # Set up Q CLI configuration for newly created container
-            "$SCRIPT_DIR/scripts/setup-q-config.sh" "$project_name"
-            
-            # Set up encrypted keychain for newly created container
-            "$SCRIPT_DIR/scripts/setup-keychain.sh" "$project_name"
+            # Set up container with new consolidated script
+            "$SCRIPT_DIR/scripts/setup-container.sh" "$project_name"
         fi
     fi
     
@@ -706,13 +699,9 @@ EOF
     echo "   Waiting for container to initialize..."
     sleep 5
     
-    # Set up Q CLI configuration
-    echo "   Setting up Q CLI configuration..."
-    "$SCRIPT_DIR/scripts/setup-q-config.sh" "$project_name"
-    
-    # Set up encrypted keychain
-    echo "   Setting up encrypted keychain..."
-    "$SCRIPT_DIR/scripts/setup-keychain.sh" "$project_name"
+    # Set up container with new consolidated script
+    echo "   Setting up container..."
+    "$SCRIPT_DIR/scripts/setup-container.sh" "$project_name"
     
     echo ""
     echo "✅ PROJECT SUCCESSFULLY ATTACHED!"
@@ -946,6 +935,161 @@ remove_key() {
     fi
 }
 
+setup_aws() {
+    local project_name="$1"
+    local container_name="secure-ai-$project_name"
+    
+    if [[ -z "$project_name" ]]; then
+        echo "Usage: secure-agent setup-aws <project>"
+        exit 1
+    fi
+    
+    echo "Setting up AWS credentials and CLI for project '$project_name'..."
+    
+    # Check if container is running
+    if ! docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+        echo "Error: Container '$container_name' is not running"
+        echo "Start it first: secure-agent activate $project_name"
+        exit 1
+    fi
+    
+    # Ensure .secure-agent directory exists
+    docker exec "$container_name" bash -c "
+        if [ ! -d /home/aiuser/workspace/.secure-agent ]; then
+            echo 'Error: .secure-agent directory not found'
+            echo 'Run container setup first: This should have been done automatically'
+            exit 1
+        fi
+    "
+    
+    # Check for AWS credentials in host ~/.aws/credentials file
+    local aws_creds_file="$HOME/.aws/credentials"
+    if [[ -f "$aws_creds_file" ]]; then
+        echo "✓ Found AWS credentials file at ~/.aws/credentials"
+        
+        # Extract credentials from the file
+        local access_key=$(grep "aws_access_key_id" "$aws_creds_file" | head -1 | cut -d'=' -f2 | tr -d ' ')
+        local secret_key=$(grep "aws_secret_access_key" "$aws_creds_file" | head -1 | cut -d'=' -f2 | tr -d ' ')
+        local region=$(grep "region" "$aws_creds_file" | head -1 | cut -d'=' -f2 | tr -d ' ')
+        
+        if [[ -n "$access_key" && -n "$secret_key" ]]; then
+            echo "Injecting AWS credentials from ~/.aws/credentials into container..."
+            
+            # Inject credentials into container keyring
+            docker exec "$container_name" python3 -c "
+import keyring
+from keyrings.alt.file import PlaintextKeyring
+keyring.set_keyring(PlaintextKeyring())
+keyring.set_password('aws-access-key-api', 'default', '$access_key')
+keyring.set_password('aws-secret-key-api', 'default', '$secret_key')
+print('✓ AWS credentials injected into container keyring')
+"
+            
+            # Inject region if available
+            if [[ -n "$region" ]]; then
+                docker exec "$container_name" python3 -c "
+import keyring
+from keyrings.alt.file import PlaintextKeyring
+keyring.set_keyring(PlaintextKeyring())
+keyring.set_password('aws-region-api', 'default', '$region')
+print('✓ AWS region injected into container keyring')
+"
+            fi
+        else
+            echo "Warning: Could not parse AWS credentials from ~/.aws/credentials"
+        fi
+    else
+        echo "Warning: No AWS credentials file found at ~/.aws/credentials"
+        echo "Create one with:"
+        echo "  aws configure"
+        echo "Or manually create ~/.aws/credentials with your AWS keys"
+    fi
+    
+    # Install aws-creds script to .secure-agent/bin
+    echo "Installing AWS credential helper script..."
+    docker cp "$SCRIPT_DIR/scripts/aws-creds-template" "$container_name:/home/aiuser/workspace/.secure-agent/bin/aws-creds"
+    docker exec "$container_name" chmod +x /home/aiuser/workspace/.secure-agent/bin/aws-creds
+    echo "✓ AWS credential helper installed to .secure-agent/bin"
+    
+    # Configure automatic credential loading in .bashrc
+    echo "Configuring automatic credential loading..."
+    docker exec "$container_name" bash -c '
+        if ! grep -q "aws-creds" ~/.bashrc 2>/dev/null; then
+            echo "" >> ~/.bashrc
+            echo "# Auto-load AWS credentials from keyring (if aws-creds exists)" >> ~/.bashrc
+            echo "[ -f ~/workspace/.secure-agent/bin/aws-creds ] && source ~/workspace/.secure-agent/bin/aws-creds 2>/dev/null || true" >> ~/.bashrc
+            echo "✓ Added AWS credential loading to .bashrc"
+        else
+            echo "✓ AWS credential loading already configured in .bashrc"
+        fi
+    '
+    
+    # Install AWS CLI v2 to .secure-agent/tools
+    echo "Installing AWS CLI v2..."
+    docker exec "$container_name" bash -c '
+        if ! [ -f /home/aiuser/workspace/.secure-agent/tools/aws-v2-bin/aws ]; then
+            echo "Installing AWS CLI v2 to .secure-agent/tools..."
+            
+            # Remove old AWS CLI v1 installation if it exists
+            rm -rf /home/aiuser/workspace/.secure-agent/tools/aws-cli
+            
+            # Remove system AWS CLI to prevent conflicts
+            rm -f ~/.local/bin/aws
+            
+            # Download and install AWS CLI v2
+            cd /tmp
+            curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -q awscliv2.zip
+            
+            # Install to .secure-agent directory
+            bash aws/install --bin-dir /home/aiuser/workspace/.secure-agent/tools/aws-v2-bin --install-dir /home/aiuser/workspace/.secure-agent/tools/aws-v2 --update >/dev/null 2>&1
+            
+            # Clean up
+            rm -rf /tmp/aws /tmp/awscliv2.zip
+            
+            echo "✓ AWS CLI v2 installed to .secure-agent/tools/aws-v2-bin"
+        else
+            echo "✓ AWS CLI v2 already installed in .secure-agent/tools"
+        fi
+        
+        # Always ensure PATH is configured (separate from installation check)
+        if ! grep -q "/home/aiuser/workspace/.secure-agent/tools/aws-v2-bin" ~/.bashrc 2>/dev/null; then
+            echo "export PATH=\"/home/aiuser/workspace/.secure-agent/tools/aws-v2-bin:\$PATH\"" >> ~/.bashrc
+            echo "✓ Added AWS CLI v2 to PATH in .bashrc"
+        else
+            echo "✓ AWS CLI v2 already in PATH"
+        fi
+    '
+    
+    # Test AWS credentials if available
+    if [[ -f "$HOME/.aws/credentials" ]]; then
+        echo ""
+        echo "Testing AWS credentials..."
+        docker exec "$container_name" bash -c '
+            source ~/.bashrc
+            source ~/workspace/.secure-agent/bin/aws-creds 2>/dev/null
+            if aws sts get-caller-identity >/dev/null 2>&1; then
+                echo "✓ AWS credentials working correctly"
+            else
+                echo "⚠ AWS credentials test failed - check your ~/.aws/credentials file"
+            fi
+        ' || echo "⚠ AWS test failed - credentials may need shell restart"
+    fi
+    
+    echo ""
+    echo "✅ AWS setup complete for '$project_name'"
+    echo ""
+    echo "AWS tools installed to: ~/workspace/.secure-agent/"
+    echo "├── bin/aws-creds           # Credential helper script"
+    echo "└── tools/aws-v2-bin/       # AWS CLI v2 installation"
+    echo ""
+    echo "Usage in container:"
+    echo "  source ~/.bashrc                     # Reload shell configuration"
+    echo "  aws --version                       # Should show AWS CLI v2"
+    echo "  aws s3 ls                           # AWS CLI commands work automatically"
+    echo "  source ~/.secure-agent/bin/aws-creds # Manually reload credentials"
+}
+
 debug_environment() {
     local project_dir="$PROJECTS_DIR/$project_name"
     local compose_file="$SCRIPT_DIR/docker-compose-$project_name.yml"
@@ -1101,6 +1245,10 @@ case "${1:-}" in
     remove-key)
         [ -z "$2" ] && { echo "Error: Service name required"; usage; exit 1; }
         remove_key "$2"
+        ;;
+    setup-aws)
+        [ -z "$2" ] && { echo "Error: Project name required"; usage; exit 1; }
+        setup_aws "$2"
         ;;
     *)
         echo "Error: Unknown command '${1:-}'"

@@ -1,4 +1,4 @@
-name: secure-agent-${PROJECT_NAME}
+name: ${PROJECT_NAME}
 
 services:
   secure-ai-agent:
@@ -24,33 +24,26 @@ services:
     
     # Network access (unrestricted for agent autonomy)
     networks:
-      - secure-ai-net
+      - default
     dns:
       - 1.1.1.1
       - 8.8.8.8
     
     # Volume mounts
     volumes:
+      # Project workspace (read-write) - Contains .secure-agent/, .venv/, project files
       - type: bind
         source: ${HOST_PROJECT_DIR}
         target: /home/aiuser/workspace
         read_only: false
       
+      # Q CLI authentication (read-only reference)
       - type: bind
         source: ${HOME}/.config/q
         target: /home/aiuser/.config/q
         read_only: true
       
-      - type: bind
-        source: ${HOME}/.aws
-        target: /home/aiuser/.aws-readonly
-        read_only: true
-      
-      - type: bind
-        source: ${HOME}/Library/Application Support/amazon-q
-        target: /home/aiuser/Library/Application Support/amazon-q
-        read_only: true
-      
+      # Encrypted secrets (Docker volume)
       - type: volume
         source: ai-keyring-${PROJECT_NAME}
         target: /home/aiuser/.local/share/keyrings
@@ -67,10 +60,8 @@ services:
       - /run/user/1000:size=100M,uid=1000,gid=1000
 
 networks:
-  secure-ai-net:
+  default:
     driver: bridge
-    driver_opts:
-      com.docker.network.bridge.name: secure-ai-br
 
 volumes:
   ai-keyring-${PROJECT_NAME}:

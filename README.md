@@ -110,6 +110,7 @@ secure-agent remove-key mapquest
 Docker Container (833MB)
 ├── Amazon Q CLI (pre-installed, auto-login)
 ├── Perplexity MCP Server (custom implementation)
+├── AWS CLI v2 (optional, via setup-aws command)
 ├── Python + development tools
 ├── Node.js + npm
 ├── Git + standard utilities
@@ -180,6 +181,24 @@ secure-agent activate my-project  # Drops directly into Q chat
 
 ## 🎯 Available Commands
 
+### AWS CLI Setup
+```bash
+secure-agent setup-aws <project>         # Install AWS CLI v2 and import credentials
+```
+
+The `setup-aws` command:
+- **Installs AWS CLI v2** using the official installer (not pip)
+- **Imports credentials** automatically from your `~/.aws/credentials` file
+- **Sets up environment variables** for seamless AWS CLI usage
+- **Configures PATH** so `aws` commands work in the container
+
+Prerequisites: Ensure you have AWS credentials configured on your host:
+```bash
+# On host system - configure your AWS credentials first
+aws configure
+# OR manually create ~/.aws/credentials with your keys
+```
+
 ### Environment Management
 ```bash
 secure-agent create <project>     # Create new environment or recreate existing
@@ -213,6 +232,22 @@ q doctor                        # Check Q CLI status
 ```
 
 ## 🧪 Testing
+
+### AWS CLI Test
+```bash
+# Test AWS CLI setup (requires ~/.aws/credentials on host)
+secure-agent create aws-test
+secure-agent setup-aws aws-test
+secure-agent terminal aws-test
+
+# Inside container - test AWS CLI
+aws --version                    # Should show: aws-cli/2.28.21
+aws configure list              # Should show credentials from env
+aws s3 ls                       # Should list your S3 buckets
+
+exit
+secure-agent destroy aws-test
+```
 
 ### Basic Functionality Test
 ```bash
@@ -317,6 +352,7 @@ When everything is working correctly, you should see:
 3. **MCP Server Loading**: `✓ perplexity-search loaded in 0.6s`
 4. **Tool Availability**: Q CLI offers to use `perplexity_search` for search queries
 5. **API Integration**: Successful Perplexity API calls with formatted results and citations
+6. **AWS CLI Setup**: `✓ AWS CLI v2 installed` and `aws s3 ls` works with your credentials
 
 ## 🚀 What's Next
 
@@ -324,6 +360,7 @@ This environment provides a complete AI-powered development setup with:
 - ✅ Secure, isolated project environments
 - ✅ Amazon Q CLI with auto-login support
 - ✅ Live web search via Perplexity AI
+- ✅ AWS CLI v2 with automatic credential import
 - ✅ Pre-configured work principles and development standards
 - ✅ Secure API key management
 - ✅ Full development toolchain
