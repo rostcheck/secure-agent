@@ -3,6 +3,7 @@ name: ${PROJECT_NAME}
 services:
   secure-ai-agent:
     image: secure-ai-agent:latest
+    pull_policy: never
     container_name: secure-ai-${PROJECT_NAME}
     platform: linux/amd64  # Force x86_64 emulation for Q CLI compatibility
     
