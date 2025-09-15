@@ -150,7 +150,7 @@ class PerplexityMCPServer:
                     "tools": [
                         {
                             "name": "perplexity_search",
-                            "description": "Search the web using Perplexity AI for current information and research",
+                            "description": "Ask Perplexity AI questions in natural language to get current web information and research. Use complete sentences and conversational queries, not keywords.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
