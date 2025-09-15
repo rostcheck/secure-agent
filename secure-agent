@@ -141,6 +141,7 @@ create_environment() {
     local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     export PROJECT_NAME="$project_name"
     export HOST_PROJECT_DIR="$project_dir"
+    export TZ=$(readlink /etc/localtime | sed 's|.*/zoneinfo/||' 2>/dev/null || echo "UTC")
     envsubst < "$SCRIPT_DIR/docker/docker-compose.yml.template" > "$compose_file"
     
     # Create and start container
@@ -180,6 +181,7 @@ recreate_compose_file() {
     # Create docker-compose file for this project
     export PROJECT_NAME="$project_name"
     export HOST_PROJECT_DIR="$project_dir"
+    export TZ=$(readlink /etc/localtime | sed 's|.*/zoneinfo/||' 2>/dev/null || echo "UTC")
     envsubst < "$SCRIPT_DIR/docker/docker-compose.yml.template" > "$compose_file"
     
     if [[ -f "$compose_file" ]]; then
@@ -689,6 +691,7 @@ EOF
     local compose_file="$SCRIPT_DIR/compose/docker-compose-$project_name.yml"
     export PROJECT_NAME="$project_name"
     export HOST_PROJECT_DIR="$project_dir"
+    export TZ=$(readlink /etc/localtime | sed 's|.*/zoneinfo/||' 2>/dev/null || echo "UTC")
     envsubst < "$SCRIPT_DIR/docker/docker-compose.yml.template" > "$compose_file"
     
     # Create and start container

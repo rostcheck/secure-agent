@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y \
     file \
     procps \
     libfuse2 \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Q CLI - either custom binary or official package

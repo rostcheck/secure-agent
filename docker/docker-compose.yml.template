@@ -23,6 +23,13 @@ services:
           cpus: '0.5'
           memory: 1G
     
+    # Clean environment - don't inherit host environment
+    environment:
+      - TZ=${TZ}
+      - HOME=/home/aiuser
+      - USER=aiuser
+      - SHELL=/bin/bash
+    
     # Network access (unrestricted for agent autonomy)
     networks:
       - default
@@ -48,12 +55,6 @@ services:
       - type: volume
         source: ai-keyring-${PROJECT_NAME}
         target: /home/aiuser/.local/share/keyrings
-    
-    # Clean environment - don't inherit host environment
-    environment:
-      - HOME=/home/aiuser
-      - USER=aiuser
-      - SHELL=/bin/bash
     
     # Writable areas for system operations
     tmpfs:
