@@ -976,26 +976,29 @@ setup_aws() {
         local region=$(grep "region" "$aws_creds_file" | head -1 | cut -d'=' -f2 | tr -d ' ')
         
         if [[ -n "$access_key" && -n "$secret_key" ]]; then
-            echo "Injecting AWS credentials from ~/.aws/credentials into container..."
+            echo "Setting up AWS credentials file in container..."
             
-            # Inject credentials into container keyring
-            docker exec "$container_name" python3 -c "
-import keyring
-from keyrings.alt.file import PlaintextKeyring
-keyring.set_keyring(PlaintextKeyring())
-keyring.set_password('aws-access-key-api', 'default', '$access_key')
-keyring.set_password('aws-secret-key-api', 'default', '$secret_key')
-print('✓ AWS credentials injected into container keyring')
+            # Create AWS credentials file
+            docker exec "$container_name" bash -c "
+mkdir -p ~/.aws
+cat > ~/.aws/credentials << EOF
+[default]
+aws_access_key_id = $access_key
+aws_secret_access_key = $secret_key
+EOF
+chmod 600 ~/.aws/credentials
+echo '✓ AWS credentials written to ~/.aws/credentials'
 "
             
-            # Inject region if available
+            # Set region if available
             if [[ -n "$region" ]]; then
-                docker exec "$container_name" python3 -c "
-import keyring
-from keyrings.alt.file import PlaintextKeyring
-keyring.set_keyring(PlaintextKeyring())
-keyring.set_password('aws-region-api', 'default', '$region')
-print('✓ AWS region injected into container keyring')
+                docker exec "$container_name" bash -c "
+cat > ~/.aws/config << EOF
+[default]
+region = $region
+EOF
+chmod 600 ~/.aws/config
+echo '✓ AWS region written to ~/.aws/config'
 "
             fi
         else
@@ -1008,24 +1011,7 @@ print('✓ AWS region injected into container keyring')
         echo "Or manually create ~/.aws/credentials with your AWS keys"
     fi
     
-    # Install aws-creds script to .secure-agent/bin
-    echo "Installing AWS credential helper script..."
-    docker cp "$SCRIPT_DIR/scripts/aws-creds-template" "$container_name:/home/aiuser/workspace/.secure-agent/bin/aws-creds"
-    docker exec "$container_name" chmod +x /home/aiuser/workspace/.secure-agent/bin/aws-creds
-    echo "✓ AWS credential helper installed to .secure-agent/bin"
-    
-    # Configure automatic credential loading in .bashrc
-    echo "Configuring automatic credential loading..."
-    docker exec "$container_name" bash -c '
-        if ! grep -q "aws-creds" ~/.bashrc 2>/dev/null; then
-            echo "" >> ~/.bashrc
-            echo "# Auto-load AWS credentials from keyring (if aws-creds exists)" >> ~/.bashrc
-            echo "[ -f ~/workspace/.secure-agent/bin/aws-creds ] && source ~/workspace/.secure-agent/bin/aws-creds 2>/dev/null || true" >> ~/.bashrc
-            echo "✓ Added AWS credential loading to .bashrc"
-        else
-            echo "✓ AWS credential loading already configured in .bashrc"
-        fi
-    '
+
     
     # Install AWS CLI v2 to .secure-agent/tools
     echo "Installing AWS CLI v2..."
@@ -1070,27 +1056,25 @@ print('✓ AWS region injected into container keyring')
         echo "Testing AWS credentials..."
         docker exec "$container_name" bash -c '
             source ~/.bashrc
-            source ~/workspace/.secure-agent/bin/aws-creds 2>/dev/null
             if aws sts get-caller-identity >/dev/null 2>&1; then
                 echo "✓ AWS credentials working correctly"
             else
                 echo "⚠ AWS credentials test failed - check your ~/.aws/credentials file"
             fi
-        ' || echo "⚠ AWS test failed - credentials may need shell restart"
+        ' || echo "⚠ AWS test failed"
     fi
     
     echo ""
     echo "✅ AWS setup complete for '$project_name'"
     echo ""
     echo "AWS tools installed to: ~/workspace/.secure-agent/"
-    echo "├── bin/aws-creds           # Credential helper script"
     echo "└── tools/aws-v2-bin/       # AWS CLI v2 installation"
     echo ""
+    echo "AWS credentials written to: ~/.aws/credentials"
+    echo ""
     echo "Usage in container:"
-    echo "  source ~/.bashrc                     # Reload shell configuration"
     echo "  aws --version                       # Should show AWS CLI v2"
     echo "  aws s3 ls                           # AWS CLI commands work automatically"
-    echo "  source ~/.secure-agent/bin/aws-creds # Manually reload credentials"
 }
 
 debug_environment() {
